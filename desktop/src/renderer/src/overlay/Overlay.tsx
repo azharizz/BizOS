@@ -34,6 +34,8 @@ function Pill({ s }: { s: State }) {
     thinking: 'Thinking',
     doing: step ? `${s.current + 1}/${s.steps.length} · ${step.label}` : 'Doing',
   }[s.pill]
+  const busy = s.pill === 'thinking' || s.pill === 'doing'
+  const shown = busy ? label : s.speaking ? 'Speaking' : s.dictating ? 'Listening' : label // conversation mode
   const done = s.steps.filter((x) => x.status === 'verified').length
   return (
     <motion.div layout transition={spring} className="pill" data-state={s.pill} data-online={s.online} data-mic={s.dictating}
@@ -46,8 +48,8 @@ function Pill({ s }: { s: State }) {
         <motion.span layout="position" className="pill-mark"><Mark size={18} live={s.pill === 'idle' && s.online} /></motion.span>
         <span className="pill-label">
           <AnimatePresence mode="popLayout" initial={false}>
-            <motion.span key={label} initial={{ y: 12, opacity: 0, filter: 'blur(4px)' }} animate={{ y: 0, opacity: 1, filter: 'blur(0px)' }}
-              exit={{ y: -12, opacity: 0, filter: 'blur(4px)' }} transition={spring}>{label}</motion.span>
+            <motion.span key={shown} initial={{ y: 12, opacity: 0, filter: 'blur(4px)' }} animate={{ y: 0, opacity: 1, filter: 'blur(0px)' }}
+              exit={{ y: -12, opacity: 0, filter: 'blur(4px)' }} transition={spring}>{shown}</motion.span>
           </AnimatePresence>
         </span>
         <span className="ind" aria-hidden><i /><i /><i /></span>

@@ -39,6 +39,9 @@ export interface Bridge {
   setAlwaysCapture: (on: boolean) => void
   dictate: () => Promise<string | null>
   setHandsFree: (on: boolean) => void
+  /** Read text aloud with the OS voice; resolves when it has finished (or was stopped). */
+  speak: (text: string) => Promise<void>
+  stopSpeaking: () => void
   /** Listener status ('starting' | 'on' | 'off'), with a message when it stopped on an error. */
   onHandsFree: (fn: (status: 'off' | 'starting' | 'on', error?: string) => void) => void
   onWake: (fn: () => void) => void

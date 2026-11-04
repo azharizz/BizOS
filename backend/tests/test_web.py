@@ -89,9 +89,9 @@ def test_plans_that_close_apps_are_never_auto_run():
     s = agent.Session({})
     plan = {"flow": "general", "team": "t", "title": "t", "subject": "s", "rationale": "r", "sensed": [], "agentic": True,
             "items": tools.validate_plan("general", [tools.PlanStep(tool="close_app", why="Close Notepad without saving")])}
-    assert s.offer(plan)["plan"]["confirm"] is True
+    assert s.offer(plan)["plan"]["confirm"] == "Close Notepad without saving"  # spoken back when asking to confirm
     plan["items"] = tools.validate_plan("general", [tools.PlanStep(tool="web_search", why="Find prices")])
-    assert s.offer(plan)["plan"]["confirm"] is False
+    assert s.offer(plan)["plan"]["confirm"] is None
 
 
 async def test_web_search_without_chrome_opens_default_browser_and_reads_on_server(monkeypatch):

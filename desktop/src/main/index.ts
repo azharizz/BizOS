@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import type { Config, Context, Settings } from '../shared/types'
 import { createSense } from './sense'
 import { createDesktop } from './desktop'
-import { createVoice } from './voice'
+import { createSpeaker, createVoice } from './voice'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = resolve(app.getAppPath(), '../..') // repo root in dev: app/desktop -> ../..
@@ -29,6 +29,7 @@ const config: Config = {
 }
 const sense = createSense(process.platform)
 const voice = createVoice(process.platform)
+const speaker = createSpeaker(process.platform)
 const desktop = createDesktop(() => sense.read('')) // empty clipboard: never hand it to an agent action
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')
 // Global settings (apply to every app and site): per-app off switch and screen-capture "Always yes".
@@ -71,6 +72,7 @@ function startWake() {
   createInterface({ input: proc.stdout! }).on('line', (line) => {
     if (line !== 'wake') console.log(`[bizos] hands-free: ${line}`)
     else console.log('[bizos] hands-free: heard "Hey BizOS"')
+    if (line === 'wake') speaker.stop() // talking over BizOS interrupts it
     if (line === 'wake') void summon().then(() => overlay?.webContents.send('wake'))
     else if (line === 'status listening') handsFree('on')
     else if (line.startsWith('error ')) error = line.slice(6)
@@ -188,6 +190,8 @@ ipcMain.on('mute', (_e, appName: string, off = true) => {
   saveSettings()
   if (!off) void summon() // read the app again now that it's allowed
 })
+ipcMain.handle('speak', (_e, text: string) => speaker.speak(String(text).slice(0, 600)))
+ipcMain.on('stop-speaking', () => speaker.stop())
 ipcMain.on('hands-free', (_e, on: boolean) => {
   settings.handsFree = !!on
   saveSettings()
@@ -234,5 +238,6 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   backend?.kill()
   stopWake()
+  speaker.stop()
 })
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit())

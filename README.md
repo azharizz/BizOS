@@ -36,7 +36,10 @@ flows), or something else entirely (`general`: the agent writes its own queries 
   start another. Your own layout changes in "Edit layout" are saved and kept by later agent edits.
 - **Voice:** the mic button uses the OS's own engine: macOS Dictation (enable it in System Settings → Keyboard →
   Dictation), Windows voice typing (Win+H, untested). **Hands-free** (footer switch): say "Hey BizOS" any time,
-  even with the overlay closed, and it opens and starts dictating. The wake phrase is detected offline
+  even with the overlay closed, and it opens and starts dictating. It's a spoken conversation: after the chime, say
+  the request; a 2 s pause sends it, the plan runs without a click, the answer is read aloud (`say`), and it listens
+  again for a follow-up (8 s of silence ends it). Steps that can lose work (closing an app without saving) and
+  screenshots are asked aloud: say "confirm"/"yes" or "cancel"/"no". PayPal money actions stay press-and-hold. The wake phrase is detected offline
   (`bizos/wake.py`, Vosk; ~40 MB model downloaded once to `~/.bizos/models`); audio never leaves the machine.
 - **Screenshots (L3):** asked every time (No / Yes, once / **Always yes**). Always yes is global; turn it off from the
   mint `L3 auto` badge. Every automatic capture is shown on the plan card.

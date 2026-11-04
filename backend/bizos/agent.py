@@ -200,7 +200,8 @@ class Session:
         public = {k: plan[k] for k in ("flow", "team", "title", "subject", "rationale", "sensed", "agentic")}
         keep = self.workspace and plan.get("workspace", "keep") == "keep"
         editing = {"id": self.ws_id, "title": self.workspace["title"]} if keep else None
-        confirm = any(p["tool"] in CONFIRM for p in plan["items"])  # never auto-run (hands-free) a step that can lose work
+        # A step that can lose work is never auto-run (hands-free): its label is what the user is asked to confirm.
+        confirm = next((p["label"] for p in plan["items"] if p["tool"] in CONFIRM), None)
         return {"type": "plan", "plan": {**public, "steps": [p["label"] for p in plan["items"]], "editing": editing, "confirm": confirm}}
 
     async def make_plan(self, ask: dict) -> dict | None:

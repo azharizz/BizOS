@@ -16,6 +16,8 @@ const bridge: Bridge = {
   setAlwaysCapture: (on) => ipcRenderer.send('always-capture', on),
   dictate: () => ipcRenderer.invoke('dictate'),
   setHandsFree: (on) => ipcRenderer.send('hands-free', on),
+  speak: (text) => ipcRenderer.invoke('speak', text),
+  stopSpeaking: () => ipcRenderer.send('stop-speaking'),
   onHandsFree: (fn) => void ipcRenderer.on('hands-free', (_e, status, error) => fn(status, error)),
   onWake: (fn) => void ipcRenderer.on('wake', () => fn()),
   desktop: (op, args) => ipcRenderer.invoke('desktop', op, args),

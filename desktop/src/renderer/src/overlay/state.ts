@@ -13,7 +13,7 @@ export interface Plan {
   sensed: string[]
   agentic?: boolean
   editing?: { id: string; title: string } | null // null: this plan starts a new workspace
-  confirm?: boolean // has a step that can lose work: always needs the Proceed click
+  confirm?: string | null // a step that can lose work (its label): never auto-run, needs a click or a spoken "confirm"
 }
 
 export interface Caps { model?: string; tools?: boolean | null; vision?: boolean | null; error?: string | null }
@@ -38,6 +38,7 @@ export interface State {
   fresh: boolean
   chrome: { connected: boolean; token?: string; outdated?: boolean }
   dictating: boolean // the OS dictation was started from BizOS (it doesn't say when it stops)
+  speaking: boolean // reading an answer or a question aloud
   handsFree: HandsFree
 }
 
@@ -65,12 +66,14 @@ export type Event =
   | { type: 'done'; workspace_id: string }
   | { type: 'error'; message: string }
   | { type: 'dictate' }
+  | { type: 'dictated' }
+  | { type: 'speaking'; on: boolean }
   | { type: 'handsFree'; status: HandsFree }
 
 export const initial: State = {
   pill: 'idle', open: false, context: null, muted: false, goal: '', plan: null, steps: [], current: -1,
   consent: null, workspace: null, brief: '', error: null, caps: {}, online: false, alwaysCapture: false, captured: null, fresh: false, chrome: { connected: false },
-  dictating: false, handsFree: 'off',
+  dictating: false, speaking: false, handsFree: 'off',
 }
 
 export function reduce(s: State, e: Event): State {
@@ -78,7 +81,7 @@ export function reduce(s: State, e: Event): State {
     case 'summon':
       return { ...s, open: true, context: e.context, muted: !!e.muted, error: null, pill: s.pill === 'idle' ? 'listening' : s.pill }
     case 'dismiss':
-      return { ...s, open: false, dictating: false, pill: s.pill === 'listening' ? 'idle' : s.pill }
+      return { ...s, open: false, dictating: false, speaking: false, pill: s.pill === 'listening' ? 'idle' : s.pill }
     case 'ask':
       return { ...s, dictating: false, goal: e.goal, pill: 'thinking', plan: null, steps: [], current: -1, brief: '', error: null, consent: null, captured: null, fresh: false }
     case 'plan':
@@ -118,6 +121,10 @@ export function reduce(s: State, e: Event): State {
       return { ...s, online: e.online }
     case 'dictate':
       return { ...s, dictating: true }
+    case 'dictated':
+      return { ...s, dictating: false }
+    case 'speaking':
+      return { ...s, speaking: e.on }
     case 'handsFree':
       return { ...s, handsFree: e.status }
     case 'chrome':
@@ -131,9 +138,25 @@ export function reduce(s: State, e: Event): State {
  */
 export const PAUSE_MS = 2000
 export const SILENCE_MS = 10_000
-export function heardOutcome(text: string, startedAt: number, changedAt: number, now: number): 'send' | 'wait' | 'nothing' {
+export const FOLLOW_UP_MS = 8000 // conversation mode: listening again after an answer; silence just ends it
+export function heardOutcome(text: string, startedAt: number, changedAt: number, now: number, silenceMs = SILENCE_MS): 'send' | 'wait' | 'nothing' {
   if (text.trim()) return now - changedAt >= PAUSE_MS ? 'send' : 'wait'
-  return now - startedAt >= SILENCE_MS ? 'nothing' : 'wait'
+  return now - startedAt >= silenceMs ? 'nothing' : 'wait'
+}
+
+const YES = /\b(yes|yeah|yep|confirm(ed)?|proceed|go ahead|do it|okay|ok)\b/i
+const NO = /\b(no|nope|cancel|stop|don'?t|abort)\b/i
+/** A spoken answer to "confirm or cancel?": only an unambiguous one counts; anything mixed or unclear is null. */
+export function voiceDecision(text: string): 'yes' | 'no' | null {
+  const yes = YES.test(text), no = NO.test(text)
+  return yes === no ? null : yes ? 'yes' : 'no'
+}
+
+/** What gets read aloud when a hands-free run finishes: the brief's bold headline (or first sentence), short. */
+export function spokenSummary(brief: string): string {
+  const bold = brief.match(/\*\*(.+?)\*\*/s)?.[1]
+  const text = (bold ?? brief.split(/(?<=[.!?])\s/)[0] ?? '').replace(/[*_`#>[\]]/g, '').replace(/\s+/g, ' ').trim()
+  return text ? (text.length > 260 ? text.slice(0, 257).replace(/\s+\S*$/, '') + '…' : text) : 'Done.'
 }
 
 /** The one step to show when the list is collapsed: the step in progress, else the last that finished. */
