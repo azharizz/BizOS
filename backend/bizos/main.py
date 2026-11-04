@@ -101,7 +101,8 @@ def workspace_meta(ws_id: str):
     """Cheap poll target: the window refetches the full canvas only when agent_version moves."""
     ws = workspace(ws_id)
     return {k: ws[k] for k in ("id", "title", "headline", "narrative", "complete", "actions", "risks", "agent_version", "runs")} | {
-        "sources": [s["id"] for s in ws["data"]["sources"]]}
+        "sources": [s["id"] for s in ws["data"]["sources"]], "plan": ws.get("plan"), "theme": ws.get("theme") or {}, "content": ws.get("content") or {},
+        "pages": ws.get("pages") or [{"id": p["id"], "title": f"Page {i + 1}"} for i, p in enumerate(ws["state"]["pages"])]}
 
 
 class StateIn(BaseModel):
@@ -130,10 +131,31 @@ def preview(ref: ActionRef):
 
 @app.post("/actions/execute")
 async def execute(body: Approval):
+    spec = _action(body)
     try:
-        return await engine.execute(body.workspace_id, _action(body), body.idempotency_key, body.approved_by)
+        result = await engine.execute(body.workspace_id, spec, body.idempotency_key, body.approved_by)
     except actions.ApprovalRequired as e:
         raise HTTPException(403, str(e))
+    except Exception as e:
+        spec["status"], spec["error"] = "failed", str(e)[:300]
+        # PayPal refusing the request (e.g. 422 validation) is not a gateway failure: say what PayPal said.
+        raise HTTPException(422 if isinstance(e, actions.PayPalError) and e.status < 500 else 502, str(e))
+    # The workspace shows what happened (action cards, the plan graph turns green), and keeps it after a restart.
+    spec["status"] = "previewed-only" if result["status"] == "PREVIEW_ONLY" else "executed"
+    spec["result"], spec["approved_by"] = result, body.approved_by.strip()[:80]
+    spec.pop("error", None)
+    MEMORY.save_workspace(WORKSPACES[body.workspace_id])
+    return result
+
+
+@app.post("/actions/status")
+async def action_status(ref: ActionRef):
+    """Live status at PayPal of what an approved action created (payment link, invoice, refund...), or null."""
+    spec = _action(ref)
+    if not spec.get("result"):
+        return {"status": None}
+    try:
+        return await engine.status(spec, spec["result"]) or {"status": None}
     except Exception as e:
         raise HTTPException(502, str(e))
 
@@ -235,6 +257,7 @@ async def ws(socket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
+        session.stop()  # nobody is listening any more: don't keep calling the model
         reader.cancel()
 
 

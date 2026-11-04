@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { PlanNode } from '../plan/graph'
 import { FOLLOW_UP_MS, heardOutcome, initial, latestStep, reduce, speakable, spokenSummary, voiceDecision, type State } from './state'
 
 const plan = { flow: 'ceo', team: 'Executive', title: 'Is this competitor undercutting us?', subject: 'Lumen', rationale: 'r', steps: ['a', 'b', 'c'], sensed: ['app', 'url'] }
@@ -170,5 +171,20 @@ describe('overlay state machine', () => {
     expect(initial.handsFree).toBe('off')
     expect(run({ type: 'handsFree', status: 'starting' }).handsFree).toBe('starting')
     expect(run({ type: 'handsFree', status: 'on' }).handsFree).toBe('on')
+  })
+
+  it('optional plan steps can be unticked before approving; department and design steps cannot', () => {
+    const graph: PlanNode[] = [
+      { index: 0, tool: 'step_research', label: 'a', risk: 'read', after: [], when: '', core: true, skipped: false, status: 'pending' },
+      { index: 1, tool: 'run_sql', label: 'b', risk: 'read', after: [0], when: '', core: false, skipped: false, status: 'pending' },
+      { index: 2, tool: 'canvas', label: 'c', risk: 'act', after: [1], when: '', core: false, skipped: false, status: 'pending' },
+    ]
+    let s = run({ type: 'summon', context: {} }, { type: 'ask', goal: 'x' }, { type: 'plan', plan: { ...plan, graph } })
+    s = reduce(s, { type: 'skip', index: 1 })
+    s = reduce(s, { type: 'skip', index: 0 })
+    s = reduce(s, { type: 'skip', index: 2 })
+    expect(s.skip).toEqual([1])
+    expect(reduce(s, { type: 'skip', index: 1 }).skip).toEqual([])
+    expect(reduce(s, { type: 'ask', goal: 'y' }).skip).toEqual([])
   })
 })

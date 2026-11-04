@@ -234,3 +234,8 @@
 @keyframes sheen { to { background-position: 200% 0; } }
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 @keyframes blink { 50% { opacity: 0; } }
+
+.plan-hint { margin: 2px 2px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.plan-hint i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #6e8fa8; margin-left: 4px; }
+.plan-hint i[data-r='act'] { background: #c9a227; }
+.plan-hint i[data-r='money'] { background: #9b5d73; }

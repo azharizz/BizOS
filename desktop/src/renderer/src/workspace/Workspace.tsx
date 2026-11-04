@@ -1,4 +1,4 @@
-import { keepPreviousData, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import type { AgReportState } from 'ag-studio'
 import { motion } from 'motion/react'
 import { useState } from 'react'
@@ -6,11 +6,12 @@ import { Mark } from '../brand/Mark'
 import { api, config } from '../lib/bridge'
 import { Markdown } from '../lib/Markdown'
 import { Actions } from './Actions'
-import { applyLive, Studio } from './Studio'
+import { setLive } from './live'
+import { client } from './query'
+import { applyLive, showPage, Studio } from './Studio'
 import type { WorkspaceMeta, WorkspaceSpec } from './types'
 import './workspace.css'
 
-const client = new QueryClient({ defaultOptions: { queries: { retry: 2, refetchOnWindowFocus: false } } })
 const ease = [0.22, 1, 0.36, 1] as const
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -31,7 +32,14 @@ export default function Workspace({ id }: { id: string }) {
 
 function View({ id }: { id: string }) {
   // Cheap poll; the canvas itself is refetched only when the agent changes it (agent_version).
-  const meta = useQuery({ queryKey: ['meta', id], queryFn: () => api<WorkspaceMeta>(`/workspaces/${id}/meta`), refetchInterval: 1200 })
+  const meta = useQuery({
+    queryKey: ['meta', id], refetchInterval: 1200,
+    queryFn: async () => {
+      const m = await api<WorkspaceMeta>(`/workspaces/${id}/meta`)
+      setLive(m) // BizOS widgets on the canvas (plan, brief, actions) read it
+      return m
+    },
+  })
   const version = meta.data?.agent_version
   const spec = useQuery({
     queryKey: ['canvas', id, version],
@@ -46,11 +54,19 @@ function View({ id }: { id: string }) {
   })
   const cfg = useQuery({ queryKey: ['config'], queryFn: () => config, staleTime: Infinity })
   const [mode, setMode] = useState<'view' | 'edit'>('view')
+  const [page, setPage] = useState('')
 
   if (meta.error) return <Empty text={meta.error.message} />
   if (!meta.data || !cfg.data) return <Loading />
   const m = meta.data
-  const widgets = Object.keys(spec.data?.state.pages[0]?.widgets ?? {}).length
+  const widgets = (spec.data?.state.pages ?? []).reduce((n, p) => n + Object.keys(p.widgets ?? {}).length, 0)
+  const current = page || spec.data?.state.selectedPageId || m.pages[0]?.id
+  // The brief and actions live in the side rail, unless the agent (or you) put them on the canvas.
+  const onCanvas = (type: string) => (spec.data?.state.pages ?? []).flatMap((p) => Object.entries(p.widgets ?? {}))
+    .filter(([, w]) => (w as { type?: string } | undefined)?.type === type).map(([id]) => id)
+  const briefOnCanvas = onCanvas('bizos-summary').length > 0
+  const placed = new Set(onCanvas('bizos-action').map((id) => m.content?.[id]?.actionId))
+  const railActions = m.actions.filter((a) => !placed.has(a.id))
 
   return (
     <div className="wsp">
@@ -82,18 +98,31 @@ function View({ id }: { id: string }) {
         </p>
       </section>
 
-      <div className="wsp-grid">
+      {m.pages.length > 1 && (
+        <nav className="pages" role="tablist" aria-label="Pages">
+          {m.pages.map((p) => (
+            <button key={p.id} role="tab" aria-selected={current === p.id} onClick={() => { setPage(p.id); showPage(p.id) }}>
+              {current === p.id && <motion.span layoutId="page-hl" className="page-hl" transition={{ type: 'spring', stiffness: 500, damping: 36 }} />}
+              <span>{p.title}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+
+      <div className="wsp-grid" data-rail={!briefOnCanvas || railActions.length > 0 || m.risks.length > 0}>
         <main className="canvas">
           {spec.data && widgets > 0
             ? <Studio ws={spec.data} license={cfg.data.agLicense} mode={mode} onState={(s) => editing && saveState(id, s, shownVersion)} />
             : <Designing />}
         </main>
         <aside className="wsp-rail">
-          <section className="rail-block brief">
-            <h2 className="rail-title">Analyst brief {!m.complete && <i className="live" />}</h2>
-            <div className="md" data-streaming={!m.complete}><Markdown text={m.narrative || '…'} /></div>
-          </section>
-          {m.actions.length > 0 && <Actions wsId={m.id} actions={m.actions} />}
+          {!briefOnCanvas && (
+            <section className="rail-block brief">
+              <h2 className="rail-title">Analyst brief {!m.complete && <i className="live" />}</h2>
+              <div className="md" data-streaming={!m.complete}><Markdown text={m.narrative || '…'} /></div>
+            </section>
+          )}
+          {railActions.length > 0 && <Actions wsId={m.id} actions={railActions} />}
           {m.risks.length > 0 && (
             <section className="rail-block">
               <h2 className="rail-title">Watch out</h2>
@@ -102,6 +131,7 @@ function View({ id }: { id: string }) {
           )}
         </aside>
       </div>
+      <div id="bw-pop-root" /> {/* host for widget popups (Expand), inside the app's React root */}
     </div>
   )
 }

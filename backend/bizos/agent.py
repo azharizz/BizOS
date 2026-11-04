@@ -5,7 +5,7 @@ Plan    planner agent explores (page tools), picks a flow and writes the steps -
 Act     analyst agent calls the tools itself: verified flow steps, its own SQL, page reads, PayPal reads
 Verify  every step tool verifies its output; a failed check stops the run and is reported
 
-Client -> server:  ask {goal, context} | consent {allow, image?} | proceed | cancel
+Client -> server:  ask {goal, context} | consent {allow, image?} | proceed {skip?: [step index]} | cancel
 Server -> client:  consent | plan | step {index, label, status, note} | workspace | token | brief_reset | done | error
 Without a model (no key, provider down) the same tools run deterministically.
 """
@@ -20,9 +20,9 @@ from agents.agent import StopAtTools
 from openai.types.responses import ResponseTextDeltaEvent
 
 from . import data, flows, llm
-from .compiler import Canvas, compose_default, has_chart, new_workspace, register
+from .compiler import Canvas, compose_default, has_chart, new_workspace, register, widget_count
 from .bridge import hub
-from .tools import CONFIRM, EXTRAS, Run, mac_tools, memory_tools, page_tools, action_tools, browser_tools, canvas_tools, paypal_tools, run_step, sql_tool, step_tools, submit_plan_tool, validate_plan
+from .tools import CONFIRM, EXTRAS, Run, mac_tools, memory_tools, page_tools, action_tools, browser_tools, canvas_tools, paypal_tools, plan_graph, run_step, sql_tool, step_tools, submit_plan_tool, validate_plan
 
 log = logging.getLogger("bizos.agent")
 LIMITS = {"app": 120, "title": 300, "url": 500, "selection": 2000, "text": 6000, "dom": 6000, "screen_text": 6000}
@@ -58,8 +58,10 @@ investigation plan, then call submit_plan.
 Choose ONE flow:
 {catalogue}
 - general: any other business question about company data (HR, budgets, cross-team, ad-hoc). No fixed steps: plan
-  1-5 run_sql steps (plus page or PayPal reads if useful), each saying what it will find out.
-Anything that is not clearly one department's question goes to general: there is no refusing.
+  1-6 steps (run_sql, page or PayPal reads, web research, PayPal proposals), each saying what it will find out.
+Anything that is not clearly one department's question goes to general: there is no refusing. Pick a department flow
+ONLY when the user's question is that flow's question (e.g. "is this competitor undercutting us?"); a product launch,
+a new price, a plan or anything broader goes to general, even when a competitor page is on screen.
 Extra tools: {extras}.
 The agent can ACT, not just read: web_search / web_open browse the internet (visibly in the user's Chrome when connected),
 open_app / read_screen work with desktop apps, write_note writes text (a summary, a list) into a new TextEdit/Notes
@@ -71,6 +73,14 @@ It can also OPERATE things: page_elements / page_click / page_type / page_select
 run_shortcut runs the user's Shortcuts; clipboard; remember / recall keep long-term memory. Steps that send, submit, buy
 or delete are confirmed with the user when they come up. It never types passwords or payment details and never uses
 shells, password managers or system settings.
+PayPal: paypal_read reads anything on the account (balances, transactions, invoices, disputes, payment links...);
+paypal_propose prepares a change (payment link for a product, invoice, reminder, refund, dispute reply) that a person
+approves in the workspace. Plan it as a step when the user wants something done at PayPal.
+Diagrams (gantt, flowchart, timeline...), ideas maps, extra pages, charts and layout are all made in the final
+"Design the workspace" step: never plan pin_table, write_note or any other step for them. write_note is only for
+writing into a local app (TextEdit, Notes) when the user asks for that.
+The plan is drawn as a graph: give a step `after` (indexes of the steps it needs, default: the previous one) to run
+independent work in parallel, and `when` for a branch (e.g. "if competitor is cheaper").
 browser_* (read the CURRENT tab) only if those tools are available to you now; call them first if the page matters.
 For a department flow, list its step_* tools, each with a short business `why` (max 10 words). Add at most 3 extra
 steps, and only for evidence the step_* tools do NOT already produce (never an extra run_sql that repeats a step). `subject` is what the investigation is about (max 8 words). `rationale` is
@@ -79,7 +89,7 @@ ONE short sentence. Set needs_screenshot only if charts or visuals on screen are
 
 
 def analyst_instructions(plan: dict) -> str:
-    steps = "\n".join(f"{i + 1}. {p['tool']}: {p['label']}" for i, p in enumerate(plan["items"]))
+    steps = "\n".join(f"{i + 1}. {p['tool']}: {p['label']}" for i, p in enumerate(plan["items"]) if not p.get("skipped"))
     general = plan["flow"] == "general"
     rules = ("There are no fixed steps. Use run_sql for company data, web_search/web_open for the internet (open the best\n"
              "2-4 results to get real figures; prefer official pages), open_app/read_screen for desktop apps. When asked to\n"
@@ -105,14 +115,47 @@ Never invent payments, recipients or amounts. {UNTRUSTED}
 Company database (SQLite):
 {data.schema()}
 Then DESIGN the workspace with the canvas tools (view_canvas first). Data sources = the step results and your pinned
-queries. Lead with 2-4 KPI tiles (add_kpi), then pick each chart for its data: line/area for time, column/bar to compare,
-stacked-column for parts, donut for shares (<= 6 slices), treemap for many categories, funnel for stages, combo for a value
-plus a rate. Size widgets so each row fills 12 columns (e.g. two halves, or third + two-thirds). At most ONE table, last,
-only if the user must scan rows. If the canvas already has widgets, edit it: add what is new, replace_widget_id to change
-a chart, remove_widget what is obsolete. Never rebuild what is already right.
+queries. Design it like an analyst who knows the subject, not a template: choose the widgets the data and the question
+call for (any AG Studio chart, pivot, gauges, filters the user can click, text blocks), any size and position, and add
+pages when there is a lot to show (e.g. Overview, Details, Plan). Put the plan graph on the canvas (add_widget kind
+"plan") when the work had several stages, draw a diagram (add_diagram) when a process, timeline, plan or structure is
+clearer as a picture, and an ideas map (add_ideas) when the user asks what they could do. PayPal changes: paypal_propose,
+then show each as an action card (add_widget kind "action"); they run only when a person approves them. Use
+configure_widget for colours, labels and axes, set_theme only if the user asks for a look. If the canvas already has
+widgets, edit it: add what is new, replace_widget_id to change a chart, remove_widget what is obsolete. Never rebuild
+what is already right. Design in ONE pass: decide the pages and widgets first, then add each once; don't keep
+re-configuring (there is a budget of 30 canvas edits per run).
 When done, write the brief in Markdown: one bold sentence, 3-5 bullets with the key numbers, then a line starting
 'Next:'. No headings, no preamble. The brief answers the business question; never describe the widgets you added or
 changed (the user sees the workspace)."""
+
+
+def apply_skip(plan: dict, skip) -> None:
+    """The user unticked optional steps on the plan graph. Department steps and the design step always run."""
+    for i in skip if isinstance(skip, list) else []:
+        if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(plan["items"]):
+            item = plan["items"][i]
+            if not item["tool"].startswith("step_") and item["tool"] != "canvas":
+                item["skipped"] = True
+
+
+def track_plan(ws: dict, nodes: list[dict] | None, subject: str | None, event: dict | None = None) -> None:
+    """The workspace keeps a live copy of the plan graph (the Plan widget draws it): statuses as steps run, and
+    steps the agent added along the way."""
+    if nodes is not None:
+        ws["plan"] = {"subject": subject or "", "nodes": [dict(n) for n in nodes]}
+    if not event or event.get("type") != "step" or not ws.get("plan"):
+        return
+    nodes = ws["plan"]["nodes"]
+    node = next((n for n in nodes if n["index"] == event["index"]), None)
+    if not node:  # a step the agent added along the way: it follows the step that ran just before it
+        last = ws["plan"].get("last")
+        node = {"index": event["index"], "tool": "", "label": event["label"], "risk": "read", "when": "", "core": False,
+                "skipped": False, "after": [last] if last is not None else []}
+        nodes.append(node)
+    node.update(status=event["status"], note=event.get("note", ""), label=event["label"])
+    if node["tool"] != "canvas":  # design runs alongside: work added during it follows the last real step
+        ws["plan"]["last"] = event["index"]
 
 
 def _ask_text(goal: str, context: dict) -> str:
@@ -140,6 +183,7 @@ class Session:
             stream = self.consent(msg)
         elif kind == "proceed" and self.plan:
             plan, self.plan = self.plan, None
+            apply_skip(plan, msg.get("skip"))
             stream = self.act(plan)
         elif kind == "cancel":
             self.pending = self.plan = None
@@ -235,7 +279,8 @@ class Session:
         editing = {"id": target["id"], "title": target["title"]} if target else None
         # A step that can lose work is never auto-run (hands-free): its label is what the user is asked to confirm.
         confirm = next((p["label"] for p in plan["items"] if p["tool"] in CONFIRM), None)
-        return {"type": "plan", "plan": {**public, "steps": [p["label"] for p in plan["items"]], "editing": editing, "confirm": confirm}}
+        return {"type": "plan", "plan": {**public, "steps": [p["label"] for p in plan["items"]], "graph": plan_graph(plan["items"]),
+                                         "editing": editing, "confirm": confirm}}
 
     async def make_plan(self, ask: dict) -> dict | None:
         agentic = llm.model() is not None
@@ -318,7 +363,12 @@ class Session:
         ws["runs"].append({"goal": plan["goal"], "flow": flow.name})
         canvas = Canvas(ws)
         queue: asyncio.Queue = asyncio.Queue()
-        run = Run(goal=plan["goal"], context=plan["context"], flow=flow, plan=plan["items"], emit=queue.put_nowait, canvas=canvas,
+        track_plan(ws, plan_graph(plan["items"]), plan["subject"] or plan["title"])
+
+        def emit(event: dict):
+            track_plan(ws, None, None, event)
+            queue.put_nowait(event)
+        run = Run(goal=plan["goal"], context=plan["context"], flow=flow, plan=plan["items"], emit=emit, canvas=canvas,
                   client=self.client if self.send else None, confirm=self.confirm if self.send else None)
         run.ctx["title"] = plan["subject"] or plan["title"]
         opened = {"done": False}
@@ -369,7 +419,7 @@ class Session:
             yield {"type": "stopped"}
             yield {"type": "brief_reset"}
             yield {"type": "token", "text": narrative}
-            yield {"type": "done", "workspace_id": ws["id"] if ws["state"]["pages"][0]["widgets"] else None}
+            yield {"type": "done", "workspace_id": ws["id"] if widget_count(ws) else None}
             return
         if run.failed:
             ws["complete"] = True
@@ -383,10 +433,10 @@ class Session:
         self.finish(run, ws, text)
         if not designed:  # laid out by compose_default: still report the plan's design step
             i, label = run.slot("canvas", "Design the workspace")
-            yield {"type": "step", "index": i, "label": label, "status": "verified", "note": f"{len(ws['state']['pages'][0]['widgets'])} widgets"}
-        if ws["state"]["pages"][0]["widgets"] and not opened["done"]:
+            yield {"type": "step", "index": i, "label": label, "status": "verified", "note": f"{widget_count(ws)} widgets"}
+        if widget_count(ws) and not opened["done"]:
             yield {"type": "workspace", "id": ws["id"], "title": ws["title"], "headline": ws["headline"]}
-        yield {"type": "done", "workspace_id": ws["id"] if ws["state"]["pages"][0]["widgets"] else None}
+        yield {"type": "done", "workspace_id": ws["id"] if widget_count(ws) else None}
 
     def finish(self, run: Run, ws: dict, narrative: str):
         """Register this run's evidence; if the agent didn't design anything, lay out the flow's suggestions."""

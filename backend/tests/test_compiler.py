@@ -66,8 +66,6 @@ def test_replace_keeps_position_and_bad_specs_explain_themselves():
         canvas.add({"kind": "hologram", "source": "undercut", "title": "x"})
     with pytest.raises(KeyError, match="Fields"):
         canvas.add({"kind": "line", "source": "undercut", "x": "nope", "y": ["gap_pct"], "title": "x"})
-    with pytest.raises(ValueError, match="already has a table"):
-        canvas.add({"kind": "grid", "source": "scenarios", "title": "another table"})
 
 
 def test_removing_a_widget_closes_the_gap():

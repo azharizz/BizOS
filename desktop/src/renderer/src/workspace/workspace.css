@@ -169,3 +169,68 @@
 .history-pop span { grid-column: 1; font-size: 12px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-pop i { grid-row: 1; grid-column: 2; font: normal 11px var(--mono, monospace); opacity: 0.55; }
 .history-empty { padding: 10px; font-size: 12.5px; opacity: 0.6; }
+
+/* ---------------- pages (AG Studio keeps them; BizOS shows the tabs) */
+.pages { display: flex; gap: 2px; margin: 0 28px 14px; padding: 3px; width: fit-content; background: #e8e4d9; border-radius: 11px; }
+.pages button { position: relative; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: var(--mute); background: none; border: 0; border-radius: 8px; }
+.pages button[aria-selected='true'] { color: var(--ink); }
+.pages button > span:last-child { position: relative; }
+.page-hl { position: absolute; inset: 0; background: var(--card-2); border-radius: 8px; box-shadow: 0 1px 2px rgba(18, 19, 16, 0.08); }
+.wsp-grid[data-rail='false'] { grid-template-columns: minmax(0, 1fr); }
+.wsp-grid[data-rail='false'] .wsp-rail { display: none; }
+
+/* ---------------- BizOS widgets inside AG Studio */
+.bw { width: 100%; height: 100%; box-sizing: border-box; overflow: auto; }
+.bw-empty { margin: 0; height: 100%; display: grid; place-items: center; color: var(--faint, #9a958a); font-size: 13px; text-align: center; }
+.bw-diagram { display: grid; place-items: center; padding: 6px; }
+.bw-svg { width: 100%; height: 100%; display: grid; place-items: center; }
+.bw-svg svg { max-width: 100%; max-height: 100%; height: auto; }
+.bw-error { margin: 0; padding: 10px; white-space: pre-wrap; color: #d23f4a; font: 500 11.5px/1.45 'IBM Plex Mono', monospace; }
+.bw-summary, .bw-text { padding: 2px 6px; font-size: 14px; line-height: 1.55; }
+.bw-text p:first-child { margin-top: 0; }
+.bw-action { padding: 2px; }
+.bw-action .action { margin: 0; }
+.bw-ideas .react-flow__node { cursor: pointer; }
+.bw-idea, .bw-idea-center {
+  width: 180px !important; padding: 9px 12px; border-radius: 14px; font: 560 12.5px/1.3 'Bricolage Grotesque Variable', sans-serif;
+  border: 1px solid #e2ddd0 !important; background: #fffefb !important; color: #121310;
+  transition: transform .18s, box-shadow .18s, border-color .18s;
+}
+.bw-idea span { display: flex; flex-direction: column; gap: 3px; text-align: left; }
+.bw-idea i { font: 500 10px 'IBM Plex Mono', monospace; font-style: normal; color: #9a958a; }
+.bw-idea:hover { transform: translateY(-2px); border-color: #12b877 !important; box-shadow: 0 8px 22px -12px rgba(18, 184, 119, .55); }
+.bw-idea-center { background: #121310 !important; color: #ece8df; border-color: #121310 !important; font-weight: 680; text-align: center; cursor: default !important; }
+.bw-ideas .react-flow__handle { opacity: 0; }
+
+/* ---------------- general PayPal actions */
+.sheet-body { max-height: 160px; overflow: auto; margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; background: #efebe1; font: 500 11px/1.45 'IBM Plex Mono', monospace; white-space: pre; }
+.action-kind[data-tier='money'] { color: #9b5d73; }
+.stamp-link { display: flex; gap: 10px; }
+
+/* ---------------- expand a BizOS widget into a large popup */
+.bw-plan, .bw-diagram, .bw-ideas { position: relative; }
+.bw-expand {
+  position: absolute; top: 4px; right: 4px; z-index: 5; width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid #e2ddd0; border-radius: 9px; background: #fffefb; color: #6f6a5e; cursor: pointer;
+  opacity: .55; transition: opacity .15s, color .15s, border-color .15s, transform .15s;
+}
+.bw:hover .bw-expand, .bw-expand:focus-visible { opacity: 1; }
+.bw-expand:hover { color: #121310; border-color: #12b877; transform: scale(1.06); }
+.bw-pop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 36px; background: rgba(18, 19, 16, .42); backdrop-filter: blur(3px); }
+.bw-pop-card {
+  width: min(1400px, 100%); height: min(900px, 100%); display: flex; flex-direction: column; outline: none;
+  background: #fbfaf6; border: 1px solid #e2ddd0; border-radius: 20px; box-shadow: 0 40px 90px -30px rgba(18, 19, 16, .5); overflow: hidden;
+}
+.bw-pop-card header { display: flex; align-items: center; gap: 14px; padding: 14px 16px 12px 22px; border-bottom: 1px solid #e2ddd0; }
+.bw-pop-card h2 { margin: 0; font-size: 17px; font-weight: 680; letter-spacing: -.01em; }
+.bw-pop-card .fine { flex: 1; color: #9a958a; font: 500 11px 'IBM Plex Mono', monospace; }
+.bw-pop-card header button { width: 32px; height: 32px; border: 0; border-radius: 9px; background: #efebe1; font-size: 20px; line-height: 1; cursor: pointer; }
+.bw-pop-card header button:hover { background: #e2ddd0; }
+.bw-pop-body { position: relative; flex: 1; min-height: 0; padding: 10px; }
+.bw-pop-body .pg-node { font-size: 13px; }
+.bw-zoom { width: 100%; height: 100%; overflow: auto; display: grid; place-items: start center; }
+.bw-zoom .bw-svg { height: auto; min-width: 100%; }
+.bw-zoom .bw-svg svg { max-width: none !important; width: 100%; height: auto; max-height: none; }
+.bw-zoom-ctl { position: absolute; right: 18px; bottom: 16px; display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: #e8e4d9; }
+.bw-zoom-ctl button { min-width: 34px; height: 30px; border: 0; border-radius: 8px; background: transparent; font: 600 12.5px 'IBM Plex Mono', monospace; cursor: pointer; }
+.bw-zoom-ctl button:hover { background: #fffefb; }

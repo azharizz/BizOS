@@ -15,7 +15,7 @@ app/
       bridge.py         Chrome extension hub (request/response over WebSocket)
       llm.py            model for the SDK + startup capability check + L3 vision
       main.py           /ws /ext /workspaces /actions/* /paypal/payouts/* /extension /audit /health
-    tests/              61 tests
+    tests/              154 tests
   desktop/              Electron · React · Vite (overlay pill + workspace window)
   chrome_extension/     MV3: background.js, content_script.js, popup, options (bridge URL + token)
 ```
@@ -31,9 +31,18 @@ Press **⌘⇧Space** (Ctrl+Shift+Space) over any app and ask anything. Drag the
 whether it's an executive, finance, marketing, engineering, operations, procurement or sales question (seven verified
 flows), or something else entirely (`general`: the agent writes its own queries and builds the workspace from them).
 
-- **Workspace:** the agent designs it in AG Studio (KPI tiles, charts picked for the data, a 12-column grid, at most
-  one table). Asking again **edits the same workspace** live (the overlay shows "Editing · <title>"); click **New** to
-  start another. Your own layout changes in "Edit layout" are saved and kept by later agent edits.
+- **Plan graph:** before anything runs, the overlay draws the plan as a graph (what waits for what, branches, colour
+  = risk). × skips an optional step; department steps always run. The workspace keeps a live copy (Plan widget).
+- **Workspace:** designed freely in AG Studio: every AG widget (charts, pivot, gauges, scatter/bubble, radar, sunburst,
+  date/list/button filters, text, images), any size and position, any format option, several pages (tabs), a theme per
+  workspace, plus BizOS widgets: **Plan graph**, **Diagram** (Mermaid: flowchart, gantt, timeline, sequence, mind map,
+  ER...), **Ideas map** (click an idea to ask BizOS), **Summary**, **PayPal action**. Asking again **edits the same
+  workspace** live; click **New** to start another. Your own changes in "Edit layout" are kept by later agent edits.
+- **PayPal (general):** the agent can read anything on an approved list of PayPal endpoints (`actions.CATALOG`:
+  balances, transactions, invoices, disputes, payment links, products, subscriptions...) and *propose* any change on it
+  (payment link for a product, invoice, reminder, real refund, dispute reply). A proposal is an action card; only a
+  person executes it, press-and-hold, audited, once per approval. Its live status (e.g. a payment link ACTIVE) shows
+  on the card and the plan graph turns green. Card, vault and identity endpoints are not on the list.
 - **Voice:** the mic button uses the OS's own engine: macOS Dictation (enable it in System Settings → Keyboard →
   Dictation), Windows voice typing (Win+H, untested). **Hands-free** (footer switch): say "Hey BizOS" any time,
   even with the overlay closed, and it opens and starts dictating. It's a spoken conversation: after the chime, say
@@ -69,14 +78,15 @@ Chrome asks once to allow **local network access**: click Allow (the bridge is 1
 ## Test
 
 ```bash
-cd app/backend && uv run pytest                                    # 61 passed
-cd app/desktop && npm test && npm run lint && npm run typecheck    # 22 passed (incl. extension DOM reader)
+cd app/backend && uv run pytest                                    # 154 passed
+cd app/desktop && npm test && npm run lint && npm run typecheck    # 61 passed (incl. extension DOM reader)
 ```
 
 ## PayPal Sandbox app: enable these features
 
 At developer.paypal.com → Apps & Credentials → your app → Features:
-**Payouts**, **Invoicing**, **Transaction Search**: all three enabled and verified live. Set `PAYPAL_SANDBOX_RECEIVER=<your sandbox personal account email>` in `.env` so
+**Payouts**, **Invoicing**, **Transaction Search** (enabled and verified live), plus **Payment Links & Buttons** for
+payment links (and Disputes / Subscriptions if you want those). `PAYPAL_RETURN_URL` sets where buyers land after paying. Set `PAYPAL_SANDBOX_RECEIVER=<your sandbox personal account email>` in `.env` so
 test payouts and invoices land in a real sandbox account (otherwise they stay UNCLAIMED on placeholder emails).
 Large payouts can fail for lack of sandbox balance; the workspace polls the real payout status.
 

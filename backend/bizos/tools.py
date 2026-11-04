@@ -3,7 +3,8 @@
     step_<method>        the flow's verified analysis steps (prerequisites run first, in order)
     run_sql              the agent's own read-only SQL over company data; can pin results to the workspace
     browser_*            DOM exploration of the user's Chrome tab via the extension bridge
-    paypal_*             PayPal Sandbox reads (writes stay behind human approval in actions.py)
+    paypal_read          any approved PayPal read (balances, transactions, invoices, disputes, payment links...)
+    paypal_propose       any approved PayPal change: becomes an action card only a person can execute
 
 Every call is reported to the overlay as a step event, so the user watches the agent work.
 """
@@ -20,9 +21,10 @@ from . import compiler, data, flows, web
 from .bridge import BridgeError, hub
 
 MAX_PINS = 3
+MAX_DESIGN = 30  # canvas edits per run: plenty for a rich workspace, and the run always gets to its brief
 EXTRAS = {"run_sql": "Run an extra query", "browser_snapshot": "Read the Chrome page", "browser_find": "Find on the page",
-          "browser_query": "Inspect page elements", "paypal_recent_payments": "Pull PayPal transactions",
-          "paypal_open_disputes": "Check PayPal disputes", "web_search": "Search the web", "web_open": "Open a web page",
+          "browser_query": "Inspect page elements", "paypal_read": "Read from PayPal",
+          "paypal_propose": "Prepare a PayPal action for approval", "web_search": "Search the web", "web_open": "Open a web page",
           "open_app": "Open an app", "read_screen": "Read the screen", "write_note": "Write a note", "close_app": "Close an app", "remember": "Remember this", "page_elements": "Read the page controls", "page_click": "Click on the page",
           "page_type": "Type on the page", "page_select": "Choose an option", "page_scroll": "Scroll the page",
           "app_read": "Read an app's controls", "app_click": "Click in an app", "app_menu": "Use an app menu", "app_type": "Type in an app",
@@ -34,6 +36,22 @@ DESIGN = {"tool": "canvas", "label": "Design the workspace"}
 class PlanStep(BaseModel):
     tool: str
     why: str
+    after: list[int] = []  # indexes (in this list) of the steps this one needs; default: the step before
+    when: str = ""  # a branch: the condition under which this step runs (e.g. "if we cut price")
+
+
+READ = {"run_sql", "browser_snapshot", "browser_find", "browser_query", "web_search", "web_open", "read_screen", "page_elements",
+        "app_read", "paypal_read"}
+ASKS = {"close_app", "run_shortcut", "clipboard"}
+
+
+def risk(tool: str) -> str:
+    """read (looks only), act (changes something on screen or in the workspace), risky (asked first), money."""
+    if tool == "paypal_propose":
+        return "money"
+    if tool in ASKS:
+        return "risky"
+    return "read" if tool in READ or tool.startswith("step_") else "act"
 
 
 @dataclass
@@ -55,6 +73,7 @@ class Run:
     canvas: "compiler.Canvas | None" = None
     on_canvas: Callable[[], None] | None = None  # first design call: open the workspace window
     designed: int = 0
+    plan_index: int | None = None  # the plan step a PayPal proposal belongs to
     client: Callable | None = None  # desktop actions, carried out by the overlay on the user's machine
     confirm: Callable | None = None  # async (question) -> bool: asks the user mid-run (card or voice); None = refuse
 
@@ -64,7 +83,7 @@ class Run:
     def slot(self, tool: str, label: str) -> tuple[int, str]:
         """Planned step for this tool if one is still open, otherwise a new step appended to the plan."""
         for i, p in enumerate(self.plan):
-            if p["tool"] == tool and i not in self.used:
+            if p["tool"] == tool and i not in self.used and not p.get("skipped"):
                 self.used.add(i)
                 return i, p["label"]
         i = len(self.plan) + self.extras
@@ -78,19 +97,45 @@ def validate_plan(flow_name: str, steps: list[PlanStep]) -> list[dict]:
     workspace is complete), unknown tools are dropped, page reads go first and other extras last (max 3)."""
     flow = flows.make_flow(flow_name)
     core = {f"step_{m}": label for label, m in flow.steps}
-    why, extras = {}, []
-    for s in steps:
+    why, extras, src = {}, [], {}
+    for n, s in enumerate(steps):
         if f"step_{s.tool}" in core:  # models sometimes drop the prefix
-            s = PlanStep(tool=f"step_{s.tool}", why=s.why)
+            s = PlanStep(tool=f"step_{s.tool}", why=s.why, after=s.after, when=s.when)
         if s.tool in core:
             why.setdefault(s.tool, s.why.strip()[:110] or core[s.tool])
-        elif s.tool in EXTRAS and len(extras) < (3 if core else 5):
-            extras.append({"tool": s.tool, "label": s.why.strip()[:110] or EXTRAS[s.tool]})
+            src.setdefault(s.tool, n)
+        elif s.tool in EXTRAS and len(extras) < (3 if core else 6):
+            extras.append({"tool": s.tool, "label": s.why.strip()[:110] or EXTRAS[s.tool], "src": n,
+                           "deps": [a for a in s.after if isinstance(a, int)][:4], "when": s.when.strip()[:60]})
     if not core and not extras:
         extras = [{"tool": "run_sql", "label": "Query company data"}]
     first = [e for e in extras if e["tool"].startswith("browser_")]
     last = [e for e in extras if not e["tool"].startswith("browser_")]
-    return first + [{"tool": t, "label": why.get(t, lbl)} for t, lbl in core.items()] + last + [DESIGN]
+    return first + [{"tool": t, "label": why.get(t, lbl), "src": src.get(t)} for t, lbl in core.items()] + last + [DESIGN]
+
+
+def plan_graph(items: list[dict]) -> list[dict]:
+    """The approved plan as a graph for the overlay and the workspace: each step with the steps it waits for,
+    an optional branch condition, its risk, and whether it's a required (department) step."""
+    at = {p["src"]: i for i, p in enumerate(items) if p.get("src") is not None}
+    nodes = []
+    for i, p in enumerate(items):
+        if p["tool"] == "canvas":
+            continue
+        if p["tool"].startswith("step_"):
+            after = [i - 1] if i else []
+        else:
+            after = sorted({at[d] for d in p.get("deps", []) if at.get(d, i) < i}) or ([i - 1] if i else [])
+        nodes.append({"index": i, "tool": p["tool"], "label": p["label"], "risk": risk(p["tool"]), "after": after,
+                      "when": p.get("when", ""), "core": p["tool"].startswith("step_"), "skipped": bool(p.get("skipped")),
+                      "status": "pending"})
+    used = {a for n in nodes for a in n["after"]}
+    ends = [n["index"] for n in nodes if n["index"] not in used and not n["skipped"]]
+    design = next((i for i, p in enumerate(items) if p["tool"] == "canvas"), None)
+    if design is not None:
+        nodes.append({"index": design, "tool": "canvas", "label": items[design]["label"], "risk": "act", "after": ends,
+                      "when": "", "core": False, "skipped": False, "status": "pending"})
+    return nodes
 
 
 def _summary(result: dict) -> str:
@@ -537,25 +582,65 @@ def mac_tools(run: Run) -> list:
                                        clipboard_read, clipboard_write)]
 
 
+def _catalog(tier: set[str]) -> str:
+    from .actions import CATALOG
+    return "\n".join(f"  {k} ({e.tier}): {e.method} {e.path} - {e.about}" for k, e in CATALOG.items() if e.tier in tier)
+
+
+def _obj(text: str, name: str) -> dict:
+    try:
+        v = json.loads(text or "{}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{name} is not valid JSON ({e})")
+    if not isinstance(v, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    return v
+
+
 def paypal_tools(run: Run, paypal) -> list:
     if not paypal:
         return []
+    from .actions import propose
 
-    async def paypal_recent_payments(days: int = 30) -> str:
-        """PayPal Sandbox Transaction Search for the last `days` days (max 31). Read-only."""
+    async def paypal_read(endpoint: str, params_json: str = "{}", query_json: str = "{}", body_json: str = "{}") -> str:
+        """Read anything from the PayPal account (Sandbox). params_json fills ids in the path, query_json adds query
+        parameters (transactions_search defaults to the last 30 days). Endpoints:"""
         async def go():
-            rows = await paypal.transactions(days)
-            return rows, f"{len(rows)} transactions"
-        return await _extra(run, "paypal_recent_payments", go)
+            body = await paypal.read(endpoint, _obj(params_json, "params_json"), _obj(query_json, "query_json"),
+                                     _obj(body_json, "body_json") or None)
+            n = next((len(v) for v in body.values() if isinstance(v, list)), None)
+            return body, f"{n} items" if n is not None else endpoint
+        return await _extra(run, "paypal_read", go, f"PayPal: {endpoint.replace('_', ' ')}")
 
-    async def paypal_open_disputes() -> str:
-        """Open disputes on the PayPal Sandbox account. Read-only."""
+    async def paypal_propose(endpoint: str, label: str, why: str, params_json: str = "{}", body_json: str = "{}") -> str:
+        """Prepare a PayPal change (create a payment link, send or remind an invoice, refund, reply to a dispute...).
+        It is NOT executed: it becomes an action card in the workspace that a person approves with press-and-hold.
+        label: what it does, for the card (e.g. "Payment link: Cold Brew 1L at $8.40"). why: the evidence behind it.
+        Show it on the canvas with add_widget(kind="action", action_id=<returned id>). Endpoints:"""
         async def go():
-            rows = await paypal.disputes()
-            return rows, f"{len(rows)} disputes"
-        return await _extra(run, "paypal_open_disputes", go)
+            if not run.canvas:
+                raise RuntimeError("no workspace to put the action in")
+            ws = run.canvas.ws
+            ws["seq"] += 1
+            spec = propose(endpoint, _obj(params_json, "params_json"), _obj(body_json, "body_json"), label, why, f"pp-{ws['seq']}")
+            spec["step"] = run.plan_index
+            ws["actions"].append(spec)
+            run.canvas._bump()
+            return {"action_id": spec["id"], "request": spec["request"], "status": "waiting for a person to approve it in the workspace"}, "awaiting approval"
+        i, plan_label = run.slot("paypal_propose", label[:60] or EXTRAS["paypal_propose"])
+        run.plan_index = i
+        run.emit({"type": "step", "index": i, "label": plan_label, "status": "running"})
+        try:
+            result, note = await go()
+        except Exception as e:
+            run.emit({"type": "step", "index": i, "label": plan_label, "status": "failed", "note": str(e)[:120]})
+            return f"ERROR: {e}"
+        run.emit({"type": "step", "index": i, "label": plan_label, "status": "verified", "note": note})
+        return json.dumps(result) + " The action is waiting for a person: never say it was done."
 
-    return [function_tool(paypal_recent_payments), function_tool(paypal_open_disputes)]
+    paypal_read.__doc__ += "\n" + _catalog({"read"})
+    paypal_propose.__doc__ += "\n" + _catalog({"act", "money"})
+    return [function_tool(paypal_read), function_tool(paypal_propose)]
 
 
 def canvas_tools(run: Run) -> list:
@@ -572,42 +657,100 @@ def canvas_tools(run: Run) -> list:
         run.emit({"type": "step", "index": i, "label": label, "status": "verified", "note": note})
 
     def guarded(fn):
+        if run.designed >= MAX_DESIGN:
+            return "DONE: the design budget for this run is used up. Stop designing and write the brief now."
         try:
             out = fn()
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, TypeError) as e:  # json errors are ValueErrors too
             return f"ERROR: {e}"
         run.designed += 1
-        report(f"{len(run.canvas.page['widgets'])} widgets")
+        report(f"{compiler.widget_count(run.canvas.ws)} widgets")
         return out
 
     def view_canvas() -> str:
-        """Current widgets (id, kind, title, fields, grid box) and the data sources you can chart (with their fields)."""
-        return json.dumps(run.canvas.summary(), default=str)[:6000]
+        """Pages, theme, current widgets (id, kind, title, fields, page, grid box), the data sources you can chart (with
+        their fields) and the PayPal actions waiting for approval."""
+        return json.dumps(run.canvas.summary(), default=str)[:7000]
 
     def add_kpi(label: str, value: float, unit: str = "", tone: str = "neutral") -> str:
         """Add (or update, same label) a KPI tile. unit: "$", "%", "x", "d" or "". tone: good, bad or neutral."""
         return guarded(lambda: f"added {run.canvas.add_kpi(label, value, unit, tone)}")
 
-    def add_widget(kind: str, source: str, title: str, x: str = "", y: list[str] | None = None, y2: list[str] | None = None,
-                   series: str = "", cols: list[str] | None = None, width: str = "half", height: str = "medium",
-                   replace_widget_id: str = "") -> str:
-        """Add a chart or table to the canvas (12-column grid; widgets flow left to right, top to bottom).
-        kind: line or area (trends over time), column/bar (compare categories), stacked-column (parts over categories),
-        donut or pie (share of a whole, <= 6 slices), treemap (many categories by size), funnel (stages),
-        combo (columns y + line y2 on one category x), grid (a table: at most ONE per canvas, only for rows to scan),
-        note (a short heading; put the text in `title`).
-        x = category/date field, y = value fields, series = field that splits lines/bars into series.
-        width: quarter, third, half, two-thirds, full. height: short, medium, tall.
-        replace_widget_id: swap an existing widget in place (keeps its position)."""
-        spec = {"kind": kind, "source": source, "title": title, "x": x, "y": y or [], "y2": y2 or [], "series": series,
-                "cols": cols or None, "width": width, "height": height, "text": title}
-        return guarded(lambda: f"added {run.canvas.add(spec, replace=replace_widget_id or None)}")
+    def add_widget(kind: str, title: str, source: str = "", x: str = "", y: list[str] | None = None, y2: list[str] | None = None,
+                   series: str = "", group: str = "", size: str = "", levels: list[str] | None = None, rows: list[str] | None = None,
+                   columns: list[str] | None = None, values: list[str] | None = None, value: str = "", agg: str = "",
+                   cols: list[str] | None = None, text: str = "", src: str = "", action_id: str = "", width: str = "half",
+                   height: str = "medium", format_json: str = "", replace_widget_id: str = "") -> str:
+        """Add any widget to the current page (12-column grid; widgets flow left to right, top to bottom). Kinds:
+        time: line, area, stacked-area, area-100 (x = date field, y = value fields, series = split into lines)
+        compare: column, bar, stacked-column, stacked-bar, column-100, bar-100, combo / stacked-combo (y columns + y2 line)
+        share: donut, pie (<= 6 slices), treemap, sunburst (x + deeper `levels`), funnel, cone-funnel, pyramid (stages)
+        shape: radar-line, radar-area, radial-bar, radial-column, nightingale (x categories, y values)
+        relation: scatter (x, y numbers, group = field naming each point), bubble (+ size)
+        numbers: kpi-like `gauge` / `linear-gauge` (value + agg), grid (a table; cols), pivot (rows, columns, values)
+        filters (the user clicks to filter the page): list-filter, button-filter, date-filter (value = the field)
+        content: text (a Markdown block in `text`: bold, bullets, short headings), note (a one-line heading = title),
+        image (src = https URL)
+        BizOS: plan (the live plan graph of this investigation), summary (the written brief), action (a PayPal action
+        card: action_id from paypal_propose), diagram / ideas (use add_diagram / add_ideas instead).
+        agg: sum (default), avg, count, min, max. width: quarter, third, half, two-thirds, full or 1-12 columns; height:
+        short, medium, tall or 2-40 rows. format_json: any AG Studio format options as JSON, e.g.
+        {"style": {"series": {"strokeWidth": 3}}}. replace_widget_id: swap a widget in place (keeps its position)."""
+        def go():
+            spec = {"kind": kind, "source": source, "title": title, "x": x, "y": y or [], "y2": y2 or [], "series": series,
+                    "group": group, "size": size, "levels": levels or [], "rows": rows or [], "columns": columns or [],
+                    "values": values or [], "value": value, "agg": agg, "cols": cols or None, "text": text, "src": src,
+                    "action_id": action_id, "width": int(width) if width.isdigit() else width,
+                    "height": int(height) if height.isdigit() else height,
+                    "format": json.loads(format_json) if format_json.strip() else None}
+            return f"added {run.canvas.add(spec, replace=replace_widget_id or None)}"
+        return guarded(go)
+
+    def add_diagram(title: str, mermaid: str, width: str = "full", height: str = "tall") -> str:
+        """Draw a diagram on the canvas from Mermaid text: flowchart (processes, swimlanes with subgraphs, decision
+        trees), sequenceDiagram (who talks to whom), gantt (rollout, reorder or project plan), timeline, mindmap,
+        stateDiagram-v2, erDiagram (how tables relate), journey (customer journey), quadrantChart (effort vs impact).
+        Colour boxes by status with classDef, e.g. classDef done fill:#C7F5DD. Keep labels short."""
+        return guarded(lambda: f"added {run.canvas.add({'kind': 'diagram', 'title': title, 'source_text': mermaid, 'width': width, 'height': height})}")
+
+    def add_ideas(title: str, center: str, ideas_json: str) -> str:
+        """An ideas map: `center` (the problem or goal) with 2-8 possible next moves around it. ideas_json: a JSON array of
+        {label, effort: low|medium|high, risk: read|act|money, ask: the request BizOS runs when the user clicks it}."""
+        def go():
+            ideas = json.loads(ideas_json)
+            return f"added {run.canvas.add({'kind': 'ideas', 'title': title, 'center': center, 'ideas': ideas})}"
+        return guarded(go)
+
+    def configure_widget(widget_id: str, format_json: str, title: str = "") -> str:
+        """Change any AG Studio format option of an existing widget, deep-merged: colours, labels, axes, legend, number
+        format, text size... e.g. {"style": {"legend": {"enabled": false}}}."""
+        return guarded(lambda: (run.canvas.configure(widget_id, json.loads(format_json), title or None), f"configured {widget_id}")[1])
+
+    def move_widget(widget_id: str, x: int, y: int, width: int, height: int) -> str:
+        """Place a widget exactly: column x (0-11), row y, width 1-12 columns, height in rows (a row is 24px)."""
+        return guarded(lambda: (run.canvas.move(widget_id, x, y, width, height), f"moved {widget_id}")[1])
 
     def remove_widget(widget_id: str) -> str:
         """Remove a widget from the canvas."""
         return guarded(lambda: (run.canvas.remove(widget_id), f"removed {widget_id}")[1])
 
-    return [function_tool(f) for f in (view_canvas, add_kpi, add_widget, remove_widget)]
+    def add_page(title: str) -> str:
+        """Add a page (a tab at the top of the workspace) and switch to it: new widgets go there. E.g. Overview,
+        Details, Plan, Actions."""
+        return guarded(lambda: f"added page {run.canvas.add_page(title)}")
+
+    def use_page(page_id: str) -> str:
+        """Switch which page new widgets go to (ids from view_canvas)."""
+        return guarded(lambda: (run.canvas.use_page(page_id), f"now on {page_id}")[1])
+
+    def set_theme(theme_json: str) -> str:
+        """Colours and font for this workspace: {"accent", "background", "canvas", "widget", "border", "text": "#RRGGBB",
+        "palette": ["#RRGGBB", ... up to 8 chart colours], "font": "family name", "radius": 0-28}. Only when the user asks
+        for a look, or the topic clearly calls for one."""
+        return guarded(lambda: (run.canvas.set_theme(json.loads(theme_json)), "theme set")[1])
+
+    return [function_tool(f) for f in (view_canvas, add_kpi, add_widget, add_diagram, add_ideas, configure_widget, move_widget,
+                                       remove_widget, add_page, use_page, set_theme)]
 
 
 def submit_plan_tool(run: Run):

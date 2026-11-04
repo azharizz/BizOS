@@ -104,9 +104,11 @@ export const actions = {
     send({ type: 'ask', goal, context: state.context ?? {}, fresh })
   },
   proceed() {
+    const skip = state.skip
     dispatch({ type: 'proceed' })
-    send({ type: 'proceed' })
+    send({ type: 'proceed', skip })
   },
+  skip: (index: number) => dispatch({ type: 'skip', index }),
   answer: (yes: boolean) => answer?.(yes),
   /** Stop whatever is happening: speech, a plan being made, or a running investigation (the backend cancels it). */
   stop() {
@@ -312,6 +314,7 @@ export function start() {
   })
   setInterval(pollChrome, 4000)
   bizos.onSummon((ctx) => dispatch({ type: 'summon', context: ctx, muted: ctx.off }))
+  bizos.onAsk((goal) => setTimeout(() => actions.ask(goal), 150)) // an idea clicked on a workspace's ideas map
   bizos.onHandsFree((status, error) => {
     dispatch({ type: 'handsFree', status })
     if (error) dispatch({ type: 'error', message: `Hands-free stopped: ${error}` })

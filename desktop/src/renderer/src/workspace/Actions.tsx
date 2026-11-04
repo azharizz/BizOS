@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { animate, AnimatePresence, motion, useMotionValue, useTransform, type AnimationPlaybackControls } from 'motion/react'
 import { useRef, useState } from 'react'
-import { api } from '../lib/bridge'
+import { api, bizos } from '../lib/bridge'
 import { money } from '../lib/format'
 import type { ActionSpec, Preview, Result } from './types'
 
-const KIND = { payout: 'PayPal Payout', invoice_reminder: 'PayPal Invoice', draft: 'Draft' } as const
+const KIND = { payout: 'PayPal Payout', invoice_reminder: 'PayPal Invoice', draft: 'Draft', paypal: 'PayPal' } as const
+const words = (s = '') => s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
 const MODE = { sandbox: 'Sandbox', 'preview-only': 'Preview only', draft: 'Draft, no money moves' } as const
 const soft = { type: 'spring', stiffness: 300, damping: 30 } as const
 
@@ -22,7 +23,7 @@ export function Actions({ wsId, actions }: { wsId: string; actions: ActionSpec[]
   )
 }
 
-function ActionCard({ wsId, a }: { wsId: string; a: ActionSpec }) {
+export function ActionCard({ wsId, a }: { wsId: string; a: ActionSpec }) {
   const ref = { workspace_id: wsId, action_id: a.id }
   const preview = useMutation({ mutationFn: () => api<Preview>('/actions/preview', ref) })
   const execute = useMutation({
@@ -30,6 +31,7 @@ function ActionCard({ wsId, a }: { wsId: string; a: ActionSpec }) {
   })
   const [approver, setApprover] = useState(savedApprover)
   const p = preview.data
+  const done = execute.data ?? (a.status && a.status !== 'failed' ? a.result : undefined) // approved earlier (kept after restart)
 
   const approve = () => {
     if (!p || !approver.trim()) return
@@ -41,33 +43,35 @@ function ActionCard({ wsId, a }: { wsId: string; a: ActionSpec }) {
     <motion.article layout className="action" data-kind={a.kind} data-open={!!p}
       variants={{ hidden: { opacity: 0, y: 14 }, show: { opacity: 1, y: 0 } }} transition={soft}>
       <header className="action-head">
-        <span className="action-kind">{KIND[a.kind]}</span>
+        <span className="action-kind" data-tier={a.tier}>{a.kind === 'paypal' ? `PayPal · ${words(a.endpoint)}` : KIND[a.kind]}</span>
         {a.amount > 0 && <span className="action-amount">{money(a.amount, a.currency)}</span>}
       </header>
       <h3>{a.label}</h3>
       <p className="action-why">{a.why}</p>
 
       <AnimatePresence mode="wait" initial={false}>
-        {execute.data ? (
-          <Stamp key="stamp" result={execute.data} mode={p!.mode} payout={a.kind === 'payout'} />
+        {done ? (
+          <Stamp key="stamp" result={done} mode={p?.mode ?? 'sandbox'} payout={a.kind === 'payout'} live={a.kind === 'paypal' ? { wsId, id: a.id } : null} />
         ) : p ? (
           <motion.div key="preview" className="sheet" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={soft}>
             <dl>
-              <dt>Amount</dt><dd className="num">{money(p.amount, p.currency)}</dd>
-              <dt>Recipient</dt><dd>{p.recipient}</dd>
+              {p.request && (<><dt>Request</dt><dd className="mono">{p.request}</dd></>)}
+              {p.amount > 0 && (<><dt>Amount</dt><dd className="num">{money(p.amount, p.currency)}</dd></>)}
+              {p.kind !== 'paypal' && (<><dt>Recipient</dt><dd>{p.recipient}</dd></>)}
               {p.email && (<><dt>Pays to</dt><dd className="mono">{p.email}</dd></>)}
               <dt>Source</dt><dd>{p.source}</dd>
               <dt>Mode</dt><dd><span className="mode" data-mode={p.mode}>{MODE[p.mode]}</span></dd>
               <dt>Key</dt><dd className="mono faint" title="Idempotency key: approving twice never pays twice">{p.idempotency_key.slice(0, 16)}…</dd>
             </dl>
-            <p className="sheet-note">Figures come from company records on the server, not from your screen.</p>
+            {p.body && <pre className="sheet-body">{JSON.stringify(p.body, null, 2)}</pre>}
+            <p className="sheet-note">{p.kind === 'paypal' ? 'Exactly this request is sent to PayPal, once, when you hold to approve.' : 'Figures come from company records on the server, not from your screen.'}</p>
             <label className="approver">
               <span>Approved by</span>
               <input value={approver} onChange={(e) => setApprover(e.target.value)} placeholder="Your name or email" />
             </label>
             {execute.error && <p className="sheet-error">{execute.error.message}</p>}
             <HoldButton disabled={!approver.trim() || execute.isPending} busy={execute.isPending} onConfirm={approve}
-              label={a.kind === 'draft' ? 'Hold to file draft' : 'Hold to approve'} />
+              label={a.kind === 'draft' ? 'Hold to file draft' : a.tier === 'money' ? 'Hold to approve payment' : 'Hold to approve'} />
           </motion.div>
         ) : (
           <motion.button key="review" className="btn-review" onClick={() => preview.mutate()} disabled={preview.isPending}
@@ -104,7 +108,7 @@ function HoldButton({ onConfirm, disabled, busy, label }: { onConfirm: () => voi
   )
 }
 
-function Stamp({ result, mode, payout }: { result: Result; mode: Preview['mode']; payout: boolean }) {
+function Stamp({ result, mode, payout, live: at }: { result: Result; mode: Preview['mode']; payout: boolean; live: { wsId: string; id: string } | null }) {
   // Payouts settle asynchronously at PayPal: poll the real item status until it leaves PENDING.
   const live = useQuery({
     queryKey: ['payout', result.reference],
@@ -112,7 +116,14 @@ function Stamp({ result, mode, payout }: { result: Result; mode: Preview['mode']
     enabled: payout && mode === 'sandbox' && !!result.reference,
     refetchInterval: (q) => (/PENDING|PROCESSING/.test(q.state.data?.item ?? 'PENDING') ? 4000 : false),
   })
+  // Anything else the general PayPal tool created (payment link, invoice, refund...): its live status at PayPal.
+  const status = useQuery({
+    queryKey: ['action-status', at?.id, result.reference],
+    queryFn: () => api<{ status: string | null }>('/actions/status', { workspace_id: at!.wsId, action_id: at!.id }),
+    enabled: !!at && !!result.reference, refetchInterval: 15_000,
+  })
   const word = result.status === 'DRAFTED' ? 'Drafted' : result.status === 'PREVIEW_ONLY' ? 'Previewed' : 'Approved'
+  const [copied, setCopied] = useState(false)
   return (
     <motion.div className="stamp-wrap" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <motion.div className="stamp" data-mode={mode}
@@ -122,7 +133,13 @@ function Stamp({ result, mode, payout }: { result: Result; mode: Preview['mode']
         {word}
       </motion.div>
       <div className="stamp-meta">
-        <span>{(live.data?.item ?? result.status).replace('_', ' ').toLowerCase()}</span>
+        <span>{(live.data?.item ?? status.data?.status ?? result.status).replace('_', ' ').toLowerCase()}</span>
+        {result.link && (
+          <span className="stamp-link">
+            <button className="linkish" onClick={() => bizos.openExternal(result.link!)}>Open link</button>
+            <button className="linkish" onClick={() => void navigator.clipboard.writeText(result.link!).then(() => setCopied(true))}>{copied ? 'Copied' : 'Copy link'}</button>
+          </span>
+        )}
         {live.data?.errors && <span className="sheet-error">{live.data.errors}</span>}
         {result.reference && <span className="mono">{result.reference}</span>}
         <span className="faint">Logged to audit trail</span>

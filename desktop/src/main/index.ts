@@ -162,6 +162,11 @@ const focusable = (on: boolean) => process.platform === 'win32' && overlay?.setF
 ipcMain.handle('config', () => config)
 ipcMain.handle('capture', () => sense.capture())
 ipcMain.on('summon', () => void summon())
+ipcMain.on('ask', async (_e, goal: string) => { // an idea clicked in the workspace: ask it in the overlay
+  if (typeof goal !== 'string' || !goal.trim()) return
+  await summon()
+  overlay?.webContents.send('ask', goal.slice(0, 500))
+})
 ipcMain.on('quit', () => app.quit()) // stops the backend, the hands-free listener and speech too (will-quit)
 ipcMain.on('interactive', (_e, on: boolean) => {
   overlay?.setIgnoreMouseEvents(!on, { forward: true })

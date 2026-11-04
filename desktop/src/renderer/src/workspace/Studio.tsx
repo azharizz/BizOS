@@ -1,7 +1,9 @@
 import { studioTheme, type AgDataSourcesDefinition, type AgReportState, type AgStudioApi } from 'ag-studio'
 import { AgStudio, AgStudioProvider } from 'ag-studio-react'
 import { motion } from 'motion/react'
+import { themeParams } from './theme'
 import type { WorkspaceSpec } from './types'
+import { widgets } from './widgets'
 
 // AG Studio in the BizOS paper palette. Series colours are ordered for contrast, mint first.
 const theme = studioTheme.withParams({
@@ -28,8 +30,14 @@ const theme = studioTheme.withParams({
   chartPaletteFills7Color: '#3A3A36',
 })
 
-/** Data sources AG Studio was mounted with. Its `data` prop can't add sources later, so new sources remount it. */
-export const signature = (ws: WorkspaceSpec) => ws.data.sources.map((s) => `${s.id}:${s.fields.length}`).join('|')
+/** Data sources (and look) AG Studio was mounted with. Its `data` prop can't add sources later, so new sources remount it. */
+export const signature = (ws: WorkspaceSpec) => ws.data.sources.map((s) => `${s.id}:${s.fields.length}`).join('|') + JSON.stringify(ws.theme ?? {})
+
+/** Show another page (the tabs above the canvas): AG Studio keeps the pages, BizOS names them. */
+export function showPage(id: string) {
+  const state = live.api?.getState()
+  if (state && state.selectedPageId !== id) live.api!.setState({ ...state, selectedPageId: id })
+}
 
 let live: { api: AgStudioApi | null; signature: string } = { api: null, signature: '' }
 
@@ -49,7 +57,8 @@ export function Studio({ ws, license, mode, onState }: {
       <motion.div key={sig} className="studio" initial={{ opacity: 0, scale: 0.995 }} animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}>
         <AgStudio
-          theme={theme}
+          theme={ws.theme && Object.keys(ws.theme).length ? theme.withParams(themeParams(ws.theme)) : theme}
+          widgets={widgets}
           data={ws.data as AgDataSourcesDefinition}
           initialState={ws.state}
           mode={mode}

@@ -1,9 +1,10 @@
 import type { AgReportState } from 'ag-studio'
-
+import type { PlanNode } from '../plan/graph'
+import type { WorkspaceTheme } from './theme'
 
 export interface ActionSpec {
   id: string
-  kind: 'payout' | 'invoice_reminder' | 'draft'
+  kind: 'payout' | 'invoice_reminder' | 'draft' | 'paypal'
   label: string
   amount: number
   currency: string
@@ -11,10 +12,19 @@ export interface ActionSpec {
   email?: string
   source: string
   why: string
+  // the general PayPal tool
+  endpoint?: string
+  tier?: 'act' | 'money'
+  request?: string
+  body?: Record<string, unknown>
+  step?: number | null // the plan step that proposed it
+  status?: 'executed' | 'previewed-only' | 'failed'
+  result?: Result
 }
 
 export interface Preview extends ActionSpec { mode: 'sandbox' | 'preview-only' | 'draft'; idempotency_key: string }
-export interface Result { status: string; reference: string | null; link?: string }
+export interface Result { status: string; reference: string | null; link?: string | null }
+export interface Page { id: string; title: string }
 
 export interface WorkspaceMeta {
   id: string
@@ -27,6 +37,10 @@ export interface WorkspaceMeta {
   agent_version: number
   runs: { goal: string; flow: string }[]
   sources: string[]
+  pages: Page[]
+  theme: WorkspaceTheme
+  plan: { subject: string; nodes: PlanNode[] } | null
+  content: Record<string, Record<string, unknown>> // BizOS widgets' content, by widget id
 }
 
 export interface WorkspaceSpec {
@@ -41,4 +55,6 @@ export interface WorkspaceSpec {
   narrative: string
   complete: boolean
   agent_version: number
+  pages?: Page[]
+  theme?: WorkspaceTheme
 }

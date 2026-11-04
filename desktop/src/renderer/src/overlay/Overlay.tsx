@@ -3,6 +3,7 @@ import { useState, type CSSProperties, type FormEvent } from 'react'
 import { Mark } from '../brand/Mark'
 import { bizos } from '../lib/bridge'
 import { Markdown } from '../lib/Markdown'
+import { PlanGraph } from '../plan/PlanGraph'
 import { latestStep, type State } from './state'
 import { actions, start, useOverlay } from './store'
 import './overlay.css'
@@ -218,7 +219,7 @@ function PlanCard({ s }: { s: State }) {
     <motion.div className="card plan" layout initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={soft}>
       <div className="plan-head">
         <span className="tag">{p.team}</span>
-        {s.workspace && <span className="tag edit">Edits workspace</span>}
+        {(p.editing !== undefined ? p.editing : s.workspace) && <span className="tag edit">Edits workspace</span>}
         {p.agentic && <span className="tag agent">Agent plan</span>}
         <span className="plan-subject">{p.subject}</span>
       </div>
@@ -230,7 +231,12 @@ function PlanCard({ s }: { s: State }) {
           {s.captured === 'auto' && <button className="linkish" onClick={() => actions.alwaysCapture(false)}>Turn off</button>}
         </p>
       )}
-      {awaiting ? <AllSteps steps={s.steps} /> : <StepTicker s={s} />}
+      {awaiting && p.graph && p.graph.length > 2 ? (
+        <>
+          <PlanGraph nodes={p.graph} skip={s.skip} onToggle={actions.skip} height={Math.min(300, 70 + depth(p.graph) * 92)} />
+          {p.graph.some((n) => !n.core && n.tool !== 'canvas') && <p className="fine plan-hint">× skips an optional step. Colours: <i data-r="read" />reads <i data-r="act" />changes <i data-r="money" />PayPal, you approve</p>}
+        </>
+      ) : awaiting ? <AllSteps steps={s.steps} /> : <StepTicker s={s} />}
       <AnimatePresence>
         {awaiting && (
           <motion.div className="row plan-actions" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
@@ -246,6 +252,11 @@ function PlanCard({ s }: { s: State }) {
 }
 
 type Steps = State['steps']
+const depth = (g: NonNullable<State['plan']>['graph'] & object) => {
+  const d = new Map<number, number>()
+  for (const n of g) d.set(n.index, Math.max(0, ...n.after.map((a) => (d.get(a) ?? 0) + 1)))
+  return Math.max(0, ...d.values())
+}
 
 function StepRow({ st, n }: { st: Steps[number]; n: number }) {
   return (

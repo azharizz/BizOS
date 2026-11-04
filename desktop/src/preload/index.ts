@@ -24,6 +24,8 @@ const bridge: Bridge = {
   onStop: (fn) => void ipcRenderer.on('stop', () => fn()),
   desktop: (op, args) => ipcRenderer.invoke('desktop', op, args),
   openExternal: (url) => ipcRenderer.send('external', url),
+  askOverlay: (goal) => ipcRenderer.send('ask', goal),
+  onAsk: (fn) => void ipcRenderer.on('ask', (_e, goal) => fn(goal)),
   openInChrome: (url) => ipcRenderer.send('open-in-chrome', url),
 }
 

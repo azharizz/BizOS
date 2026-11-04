@@ -1,31 +1,36 @@
-// BizOS service worker: one WebSocket to the BizOS bridge; forwards read-only DOM requests to the active tab.
+// BizOS service worker: one WebSocket to the BizOS bridge; forwards page reads and actions (click, type, select, scroll) to the tab.
 const DEFAULTS = { bridgeUrl: 'ws://127.0.0.1:8787/ext', token: '' }
 let socket = null
+let connecting = false // pairing, startup and wake-ups can all call connect() at once: open only one socket
 
 async function setStatus(status, extra = {}) {
   await chrome.storage.local.set({ status, statusAt: Date.now(), ...extra })
 }
 
 async function connect() {
-  if (socket && socket.readyState <= WebSocket.OPEN) return
-  const { bridgeUrl, token } = await chrome.storage.local.get(DEFAULTS)
-  if (!token) return setStatus('needs-token')
+  if (connecting || (socket && socket.readyState <= WebSocket.OPEN)) return
+  connecting = true
+  let ws
   try {
-    socket = new WebSocket(`${bridgeUrl}?token=${encodeURIComponent(token)}`)
+    const { bridgeUrl, token } = await chrome.storage.local.get(DEFAULTS)
+    if (!token) return setStatus('needs-token')
+    ws = socket = new WebSocket(`${bridgeUrl}?token=${encodeURIComponent(token)}`)
   } catch (e) {
     return setStatus('bad-url', { error: String(e) })
+  } finally {
+    connecting = false
   }
-  socket.onopen = () => socket.send(JSON.stringify({ type: 'hello', version: chrome.runtime.getManifest().version, ua: navigator.userAgent }))
-  socket.onmessage = async (m) => {
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', version: chrome.runtime.getManifest().version, ua: navigator.userAgent }))
+  ws.onmessage = async (m) => {
     const msg = JSON.parse(m.data)
     if (msg.type === 'welcome') return setStatus('connected')
     if (!msg.op) return
     const reply = await handle(msg).catch((e) => ({ ok: false, error: String(e?.message ?? e) }))
-    socket?.send(JSON.stringify({ id: msg.id, ...reply }))
+    ws.send(JSON.stringify({ id: msg.id, ...reply }))
     await chrome.storage.local.set({ lastOp: `${msg.op} · ${new Date().toLocaleTimeString()}` })
   }
-  socket.onclose = (e) => {
-    socket = null
+  ws.onclose = (e) => {
+    if (socket === ws) socket = null // an older socket closing must not drop the current one
     setStatus(e.code === 4401 ? 'bad-token' : 'disconnected')
   }
 }

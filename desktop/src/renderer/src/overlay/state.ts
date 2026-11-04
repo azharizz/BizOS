@@ -1,4 +1,5 @@
 import type { Context } from '../../../shared/types'
+import type { PlanNode } from '../plan/graph'
 
 export type Pill = 'idle' | 'listening' | 'thinking' | 'doing'
 export type StepStatus = 'pending' | 'running' | 'verified' | 'failed'
@@ -14,6 +15,7 @@ export interface Plan {
   agentic?: boolean
   editing?: { id: string; title: string } | null // null: this plan starts a new workspace
   confirm?: string | null // a step that can lose work (its label): never auto-run, needs a click or a spoken "confirm"
+  graph?: PlanNode[] // the plan as a graph (dependencies, branches, risk)
 }
 
 export interface Caps { model?: string; tools?: boolean | null; vision?: boolean | null; error?: string | null }
@@ -41,6 +43,7 @@ export interface State {
   speaking: boolean // reading an answer or a question aloud
   question: string | null // the agent asks before a risky step (send, submit, buy, delete)
   handsFree: HandsFree
+  skip: number[] // optional plan steps the user unticked before approving
 }
 
 export type HandsFree = 'off' | 'starting' | 'on'
@@ -72,11 +75,12 @@ export type Event =
   | { type: 'question'; text: string | null }
   | { type: 'speaking'; on: boolean }
   | { type: 'handsFree'; status: HandsFree }
+  | { type: 'skip'; index: number }
 
 export const initial: State = {
   pill: 'idle', open: false, context: null, muted: false, goal: '', plan: null, steps: [], current: -1,
   consent: null, workspace: null, brief: '', error: null, caps: {}, online: false, alwaysCapture: false, captured: null, fresh: false, chrome: { connected: false },
-  dictating: false, speaking: false, handsFree: 'off', question: null,
+  dictating: false, speaking: false, handsFree: 'off', question: null, skip: [],
 }
 
 export function reduce(s: State, e: Event): State {
@@ -86,7 +90,7 @@ export function reduce(s: State, e: Event): State {
     case 'dismiss':
       return { ...s, open: false, dictating: false, speaking: false, pill: s.pill === 'listening' ? 'idle' : s.pill }
     case 'ask':
-      return { ...s, dictating: false, goal: e.goal, pill: 'thinking', plan: null, steps: [], current: -1, brief: '', error: null, consent: null, captured: null, fresh: false }
+      return { ...s, dictating: false, goal: e.goal, pill: 'thinking', plan: null, steps: [], current: -1, brief: '', error: null, consent: null, captured: null, fresh: false, skip: [] }
     case 'plan':
       return { ...s, plan: e.plan, pill: 'listening', steps: e.plan.steps.map((label, index) => ({ index, label, status: 'pending' })) }
     case 'consent':
@@ -134,6 +138,11 @@ export function reduce(s: State, e: Event): State {
       return { ...s, speaking: e.on }
     case 'handsFree':
       return { ...s, handsFree: e.status }
+    case 'skip': {
+      const n = s.plan?.graph?.find((x) => x.index === e.index)
+      if (!n || n.core || n.tool === 'canvas') return s
+      return { ...s, skip: s.skip.includes(e.index) ? s.skip.filter((i) => i !== e.index) : [...s.skip, e.index] }
+    }
     case 'chrome':
       return { ...s, chrome: { connected: e.connected, token: e.token, outdated: e.outdated } }
   }

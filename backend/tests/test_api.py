@@ -116,3 +116,22 @@ def test_a_stale_window_cannot_overwrite_newer_agent_edits(client):
     r = client.put(f"/workspaces/{ws_id}/state", json={"state": stale, "base_version": full["agent_version"] - 1})
     assert r.status_code == 409
     assert client.get(f"/workspaces/{ws_id}").json()["state"]["pages"][0]["widgets"], "agent's widgets survive"
+
+
+def test_approved_actions_record_their_result_and_meta_carries_the_plan(client):
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "ask", "goal": "check invoice payments", "context": {}})
+        plan = drive(ws, {"plan"})[-1]["plan"]
+        assert plan["graph"] and plan["graph"][-1]["tool"] == "canvas"
+        ws.send_json({"type": "proceed", "skip": [0]})
+        ws_id = next(m for m in drive(ws, {"done"}) if m["type"] == "workspace")["id"]
+    meta = client.get(f"/workspaces/{ws_id}/meta").json()
+    assert meta["pages"][0]["title"] == "Overview" and meta["plan"]["nodes"][0]["status"] == "verified"
+    action = meta["actions"][0]
+    prev = client.post("/actions/preview", json={"workspace_id": ws_id, "action_id": action["id"]}).json()
+    client.post("/actions/execute", json={"workspace_id": ws_id, "action_id": action["id"],
+                                          "idempotency_key": prev["idempotency_key"], "approved_by": "me"})
+    done = client.get(f"/workspaces/{ws_id}/meta").json()["actions"][0]
+    assert done["status"] in {"executed", "previewed-only"} and done["result"]
+    live = client.post("/actions/status", json={"workspace_id": ws_id, "action_id": action["id"]}).json()
+    assert live == {"status": None}  # nothing to check at PayPal without credentials

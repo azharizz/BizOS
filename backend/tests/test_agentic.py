@@ -25,7 +25,7 @@ def test_safe_query_blocks_writes(sql):
 
 def test_schema_lists_tables_for_the_agent():
     s = data.schema()
-    assert "payments(payment_id, invoice_id" in s and s.count("\n") == 17
+    assert "payments(payment_id, invoice_id" in s and "web_funnel_daily(date" in s and s.count("\n") == 22
 
 
 # ---------------- step tools
@@ -199,7 +199,8 @@ async def test_agent_designs_the_canvas_with_tools():
                     plan=tools.validate_plan("ceo", []), emit=events.append)
     await tools.run_step(run, "simulate")
     compiler.register(run.canvas, run.flow.findings(run.ctx), {})
-    view, add_kpi, add_widget, remove_widget = tools.canvas_tools(run)
+    by = {t.name: t for t in tools.canvas_tools(run)}
+    add_kpi, add_widget = by["add_kpi"], by["add_widget"]
     from agents.tool_context import ToolContext
     async def call(tool, **args):
         import json as _j
@@ -218,7 +219,7 @@ def test_sandbox_receiver_overrides_placeholder_emails(monkeypatch):
 
 def test_plan_accepts_step_names_without_prefix():
     plan = tools.validate_plan("engineering", [tools.PlanStep(tool="spike", why="When did spend jump")])
-    assert plan[0] == {"tool": "step_spike", "label": "When did spend jump"}
+    assert (plan[0]["tool"], plan[0]["label"]) == ("step_spike", "When did spend jump")
 
 
 async def test_agent_that_only_adds_kpis_still_gets_charts_and_edits_keep_the_headline():

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "BizOS DOM Bridge",
   "version": "0.3.0",
-  "description": "Lets the BizOS agent read the page you're on (read-only) instead of guessing from pixels.",
+  "description": "Lets the BizOS agent read the page you're on and act on it (click, type, choose, scroll). Risky clicks ask you first; it never types passwords or payment details.",
   "permissions": [
     "storage",
     "tabs",

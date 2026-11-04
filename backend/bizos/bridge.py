@@ -41,7 +41,7 @@ class Hub:
         self.socket, self.info = socket, info  # ponytail: one browser at a time; newest wins
 
     def detach(self, socket):
-        if self.socket is socket:
+        if self.socket is socket:  # an older connection closing never drops the current one
             self.socket = None
             for f in self._waiting.values():
                 f.cancel()

@@ -51,5 +51,7 @@ export interface Bridge {
   onStop: (fn: () => void) => void
   desktop: (op: string, args: Record<string, string>) => Promise<{ ok: boolean; result?: unknown; error?: string }>
   openExternal: (url: string) => void
+  askOverlay: (goal: string) => void // the workspace window (an idea clicked) asks BizOS through the overlay
+  onAsk: (fn: (goal: string) => void) => void
   openInChrome: (url: string) => void
 }
