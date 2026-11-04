@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><link rel="stylesheet" href="ui.css" /><style>body { width: 300px; }</style></head>
+  <body>
+    <div class="wrap">
+      <header><img src="icons/48.png" alt="" />BizOS bridge</header>
+      <div class="card">
+        <div class="row"><span class="dot" id="dot"></span><strong id="status">…</strong></div>
+        <p id="hint"></p>
+        <span class="mono" id="last"></span>
+      </div>
+      <div class="card">
+        <strong>This page</strong>
+        <span class="mono" id="page">Not read yet</span>
+      </div>
+      <div class="row">
+        <button id="preview">Preview what BizOS sees</button>
+        <button class="ghost" id="options">Settings</button>
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

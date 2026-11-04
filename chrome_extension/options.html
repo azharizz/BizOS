@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>BizOS bridge settings</title><link rel="stylesheet" href="ui.css" /><style>.wrap { max-width: 460px; margin: 40px auto; }</style></head>
+  <body>
+    <form class="wrap" id="form">
+      <header><img src="icons/48.png" alt="" />BizOS bridge settings</header>
+      <p>The extension only reads the active tab when the BizOS agent asks. It never clicks, types or sends anything from pages on its own.</p>
+      <div class="card">
+        <label>Bridge URL<input id="bridgeUrl" required pattern="wss?://.+" /></label>
+        <label>Pairing token<input id="token" type="password" required autocomplete="off" /></label>
+        <p>Easiest: in the BizOS overlay click <b>Connect Chrome</b>; it fills these in for you. Manual: token is in <code>~/.bizos/extension-token</code>.</p>
+        <p>Chrome may ask to let this extension <b>access devices on your local network</b>. Click Allow: the bridge runs on your own machine (127.0.0.1).</p>
+      </div>
+      <div class="row"><button>Save &amp; connect</button><span class="mono" id="saved"></span></div>
+    </form>
+    <script src="options.js"></script>
+  </body>
+</html>

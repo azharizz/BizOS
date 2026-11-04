@@ -1,0 +1,12 @@
+appId: com.bizos.app
+productName: BizOS
+directories: { buildResources: build, output: dist }
+files: ['out/**', 'build/icon.png']
+mac:
+  target: dmg
+  category: public.app-category.business
+  extendInfo:
+    NSAppleEventsUsageDescription: BizOS reads the active browser tab URL when you summon it.
+    NSScreenCaptureUsageDescription: BizOS captures your screen only after you say yes.
+win:
+  target: nsis # untested
