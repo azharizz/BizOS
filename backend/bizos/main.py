@@ -19,11 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import actions, agent, bridge, config, llm
+from . import actions, agent, bridge, config, llm, memory
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("BIZOS_TOKEN", "")
-WORKSPACES: dict[str, dict] = {}
+MEMORY = memory.Memory(config.MEMORY_PATH)
+WORKSPACES: dict[str, dict] = MEMORY.load_workspaces()  # everything from earlier sessions
 paypal = (actions.PayPal(config.PAYPAL_CLIENT_ID, config.PAYPAL_CLIENT_SECRET, config.PAYPAL_BASE_URL)
           if config.PAYPAL_CLIENT_ID and config.PAYPAL_CLIENT_SECRET else None)
 engine = actions.ActionEngine(paypal, config.AUDIT_PATH)
@@ -71,6 +72,23 @@ def health():
     return {"ok": True, "capabilities": llm.caps, "paypal": "sandbox" if paypal else "preview-only"}
 
 
+@app.get("/workspaces")
+def workspaces(q: str = ""):
+    """History: recent workspaces, or the ones matching a search."""
+    return MEMORY.search(q, limit=20) if q else MEMORY.recent()
+
+
+@app.get("/memory/facts")
+def facts():
+    return MEMORY.facts(100)
+
+
+@app.delete("/memory/facts/{fact_id}")
+def forget(fact_id: int):
+    MEMORY.forget(fact_id)
+    return {"ok": True}
+
+
 @app.get("/workspaces/{ws_id}")
 def workspace(ws_id: str):
     if ws_id not in WORKSPACES:
@@ -101,6 +119,7 @@ def save_state(ws_id: str, body: StateIn):
     if not isinstance(pages, list) or not pages or not isinstance(pages[0], dict):
         raise HTTPException(422, "state needs pages")
     ws["state"] = body.state
+    MEMORY.save_workspace(ws)
     return {"ok": True}
 
 
@@ -192,7 +211,7 @@ async def ws(socket: WebSocket):
         async with lock:  # agent events and desktop calls share one socket
             await socket.send_json(event)
 
-    session = agent.Session(WORKSPACES, paypal, send)
+    session = agent.Session(WORKSPACES, paypal, send, MEMORY)
     inbox: asyncio.Queue = asyncio.Queue()
 
     async def read():  # keeps reading during a run, so desktop replies (client_result) arrive mid-stream
@@ -201,6 +220,8 @@ async def ws(socket: WebSocket):
                 msg = await socket.receive_json()
                 if msg.get("type") == "client_result":
                     session.resolve(msg)
+                elif msg.get("type") == "stop":  # handled here, not queued: the run it stops is what the queue waits on
+                    session.stop()
                 else:
                     inbox.put_nowait(msg)
         except WebSocketDisconnect:

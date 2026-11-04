@@ -23,7 +23,10 @@ MAX_PINS = 3
 EXTRAS = {"run_sql": "Run an extra query", "browser_snapshot": "Read the Chrome page", "browser_find": "Find on the page",
           "browser_query": "Inspect page elements", "paypal_recent_payments": "Pull PayPal transactions",
           "paypal_open_disputes": "Check PayPal disputes", "web_search": "Search the web", "web_open": "Open a web page",
-          "open_app": "Open an app", "read_screen": "Read the screen", "write_note": "Write a note", "close_app": "Close an app",
+          "open_app": "Open an app", "read_screen": "Read the screen", "write_note": "Write a note", "close_app": "Close an app", "remember": "Remember this", "page_elements": "Read the page controls", "page_click": "Click on the page",
+          "page_type": "Type on the page", "page_select": "Choose an option", "page_scroll": "Scroll the page",
+          "app_read": "Read an app's controls", "app_click": "Click in an app", "app_menu": "Use an app menu", "app_type": "Type in an app",
+          "app_key": "Press a key", "run_shortcut": "Run a Shortcut", "clipboard": "Use the clipboard",
           "pin_table": "Add findings to the workspace"}
 DESIGN = {"tool": "canvas", "label": "Design the workspace"}
 
@@ -46,12 +49,14 @@ class Run:
     extras: int = 0
     pinned: dict[str, dict] = field(default_factory=dict)
     failed: str | None = None
+    cancelled: bool = False  # the user said stop
     submitted: dict | None = None
     on_core_done: Callable[[], None] | None = None
     canvas: "compiler.Canvas | None" = None
     on_canvas: Callable[[], None] | None = None  # first design call: open the workspace window
     designed: int = 0
     client: Callable | None = None  # desktop actions, carried out by the overlay on the user's machine
+    confirm: Callable | None = None  # async (question) -> bool: asks the user mid-run (card or voice); None = refuse
 
     def __post_init__(self):
         self.ctx.setdefault("context", self.context)
@@ -217,6 +222,44 @@ async def write_note_tool(run: Run, text: str, app: str = "") -> str:
     return await _extra(run, "write_note", go, f"Write a note in {app or 'TextEdit'}"[:60])
 
 
+# ---------------- long-term memory (bizos/memory.py)
+async def remember_tool(run: Run, mem, fact: str) -> str:
+    async def go():
+        if not fact.strip():
+            raise ValueError("nothing to remember")
+        return {"status": "Remembered", "id": mem.remember(fact), "fact": fact.strip()}, fact.strip()[:60]
+    return await _extra(run, "remember", go, f"Remember: {fact.strip()[:50]}")
+
+
+def recall_tool(mem, query: str) -> str:
+    return json.dumps({"facts": mem.recall(query), "past_workspaces": mem.search(query)}, default=str)
+
+
+def forget_tool(mem, fact_id: int) -> str:
+    mem.forget(fact_id)
+    return f"Forgot fact {fact_id}."
+
+
+def memory_tools(run: Run, mem) -> list:
+    if not mem:
+        return []
+
+    async def remember(fact: str) -> str:
+        """Keep a fact for future sessions: something the user told you to remember, a preference, or a durable fact
+        about the company. One short sentence. Never secrets (passwords, card numbers, keys)."""
+        return await remember_tool(run, mem, fact)
+
+    async def recall(query: str) -> str:
+        """Search long-term memory: remembered facts and past workspaces (id, title, headline)."""
+        return recall_tool(mem, query)
+
+    async def forget(fact_id: int) -> str:
+        """Delete a remembered fact by id (when the user says it's wrong or asks you to forget it)."""
+        return forget_tool(mem, fact_id)
+
+    return [function_tool(f) for f in (remember, recall, forget)]
+
+
 # Steps that can lose the user's work: they run only if they were in the plan the user approved by a click.
 CONFIRM = {"close_app"}
 
@@ -333,6 +376,165 @@ def browser_tools(run: Run) -> list:
         return await _extra(run, "browser_query", go)
 
     return [function_tool(f) for f in (browser_snapshot, browser_find, browser_query)]
+
+
+# ---------------- acting in the browser (extension 0.3+): click / type / select / scroll by element number
+async def ask_user(run: Run, question: str) -> bool:
+    """Risky steps (send, submit, buy, delete...) need the user's yes, asked when they come up. No channel = no."""
+    if not run.confirm:
+        return False
+    try:
+        return bool(await run.confirm(question))
+    except Exception:
+        return False
+
+
+async def _page_act(run: Run, tool: str, ref: int, label: str, args: dict, risky_question: str | None = None) -> str:
+    async def go():
+        risk = await hub.request("risk", {"ref": ref})
+        if risk.get("blocked") and tool == "page_type":
+            raise ValueError("BizOS never types into password or payment fields")
+        asked = None if risk.get("search") else risky_question  # submitting a search box only searches
+        question = asked or (f'Click "{risk.get("label")}"? It may submit, send, buy or delete something.'
+                             if risk.get("risky") else None)
+        if question and not await ask_user(run, question):
+            raise PermissionError(f'the user declined: {question}')
+        result = await hub.request(tool.removeprefix("page_"), {"ref": ref, **args}, timeout=20)
+        return result, result.get("title") or "done"
+    out = await _extra(run, tool, go, label)
+    return out.replace("ERROR: the user declined", "STOP: the user declined") if "the user declined" in out else out
+
+
+async def page_click_tool(run: Run, ref: int) -> str:
+    return await _page_act(run, "page_click", ref, f"Click element {ref}", {})
+
+
+async def page_type_tool(run: Run, ref: int, text: str, submit: bool = False) -> str:
+    q = f'Submit the form after typing "{text[:60]}"?' if submit else None
+    return await _page_act(run, "page_type", ref, f"Type in element {ref}", {"text": text, "submit": submit}, q)
+
+
+def page_tools(run: Run) -> list:
+    if not hub.connected:
+        return []
+
+    async def page_elements() -> str:
+        """List the numbered controls on the current Chrome page (links, buttons, fields, selects) with labels.
+        `risky` ones submit/send/buy/delete (the user is asked first); `blocked` ones (passwords, payment) can't be typed in.
+        Numbers change when the page changes: read again after a click that loads a new page."""
+        async def go():
+            r = await hub.request("elements")
+            return r, f"{len(r.get('elements', []))} controls"
+        return await _extra(run, "page_elements", go)
+
+    async def page_click(ref: int) -> str:
+        """Click control `ref` from page_elements. Reports the page you end up on."""
+        return await page_click_tool(run, ref)
+
+    async def page_type(ref: int, text: str, submit: bool = False) -> str:
+        """Type into field `ref`. submit=true also submits its form (the user is asked first)."""
+        return await page_type_tool(run, ref, text, submit)
+
+    async def page_select(ref: int, option: str) -> str:
+        """Choose the option containing `option` in select `ref`."""
+        return await _page_act(run, "page_select", ref, f"Choose {option[:30]}", {"option": option})
+
+    async def page_scroll(direction: str = "down") -> str:
+        """Scroll the current page up or down."""
+        async def go():
+            r = await hub.request("scroll", {"direction": "up" if direction == "up" else "down"})
+            return r, direction
+        return await _extra(run, "page_scroll", go)
+
+    return [function_tool(f) for f in (page_elements, page_click, page_type, page_select, page_scroll)]
+
+
+# ---------------- Mac control (the overlay runs these on the user's machine; see desktop/src/main/desktop.ts)
+RISKY = re.compile(r"\b(send|post|publish|submit|buy|order|pay|purchase|checkout|delete|remove|trash|erase|empty|transfer|"
+                   r"confirm|subscribe|sign ?up|unsubscribe|reply|forward|share|invite|archive|discard|quit|log ?out)\b", re.I)
+MESSAGING = re.compile(r"messages|slack|mail|outlook|whatsapp|discord|teams|telegram|signal|messenger|line|wechat|skype|zoom", re.I)
+MAC_STEP = {"ui_read": "app_read", "ui_click": "app_click", "ui_menu": "app_menu", "type_text": "app_type", "press_key": "app_key",
+            "run_shortcut": "run_shortcut", "list_shortcuts": "run_shortcut", "clipboard_read": "clipboard", "clipboard_write": "clipboard"}
+
+
+def mac_risk(op: str, args: dict) -> str | None:
+    """The question to ask before a Mac step that could send, delete, buy or expose something; None = just do it."""
+    app = args.get("app", "")
+    if op == "ui_click" and RISKY.search(args.get("name", "")):
+        return f'Click "{args["name"]}" in {app}?'
+    if op == "ui_menu" and RISKY.search(f'{args.get("menu", "")} {args.get("item", "")}'):
+        return f'Choose {args.get("menu")} → {args.get("item")} in {app}?'
+    if op == "press_key":
+        key, mods = str(args.get("key", "")).lower(), str(args.get("modifiers", "")).lower()
+        if key in ("return", "enter") and MESSAGING.search(app):
+            return f"Press Return in {app}? That usually sends the message."
+        if key in ("delete", "backspace", "forwarddelete") and (mods or re.search(r"finder|explorer", app, re.I)):
+            return f"Press {(mods + '+') if mods else ''}{key} in {app}? That usually deletes something."
+    if op == "run_shortcut":
+        return f'Run your Shortcut "{args.get("name")}"? Shortcuts can do anything they were built to do.'
+    if op == "clipboard_read":
+        return "Read your clipboard? It might hold something private."
+    return None
+
+
+async def mac_tool(run: Run, op: str, **args) -> str:
+    args = {k: v for k, v in args.items() if v not in (None, "")}
+
+    async def go():
+        question = mac_risk(op, args)
+        if question and not await ask_user(run, question):
+            raise PermissionError(f"the user declined: {question}")
+        r = await _desktop(run, op, args)
+        return r, ", ".join(f"{k} {v}" for k, v in r.items() if k != "elements" and isinstance(v, (str, int)))[:80] or "done"
+    what = args.get("name") or args.get("item") or args.get("key") or args.get("app") or ""
+    out = await _extra(run, MAC_STEP[op], go, f"{EXTRAS[MAC_STEP[op]]}: {what}"[:60])
+    return out.replace("ERROR: the user declined", "STOP: the user declined") if "the user declined" in out else out
+
+
+def mac_tools(run: Run) -> list:
+    if not run.client:
+        return []
+
+    async def app_read(app: str) -> str:
+        """List the controls (buttons, fields, tabs...) and the visible text (role "text": displays, labels) in the front
+        window of a desktop app (Mac or Windows). Read it again after acting to see the result."""
+        return await mac_tool(run, "ui_read", app=app)
+
+    async def app_click(app: str, name: str) -> str:
+        """Click the control called `name` (from app_read) in a desktop app. Risky ones (send, delete, buy...) are confirmed."""
+        return await mac_tool(run, "ui_click", app=app, name=name)
+
+    async def app_menu(app: str, menu: str, item: str) -> str:
+        """Choose a menu item in a desktop app, e.g. menu "File", item "New Note"."""
+        return await mac_tool(run, "ui_menu", app=app, menu=menu, item=item)
+
+    async def app_type(app: str, text: str) -> str:
+        """Type text into the focused field of a desktop app (bring the field into focus first, e.g. with app_click)."""
+        return await mac_tool(run, "type_text", app=app, text=text)
+
+    async def app_key(app: str, key: str, modifiers: str = "") -> str:
+        """Press a key in a desktop app (cmd means Ctrl on Windows): return, tab, escape, delete, up/down/left/right, or one letter; modifiers e.g. "cmd,shift"."""
+        return await mac_tool(run, "press_key", app=app, key=key, modifiers=modifiers)
+
+    async def run_shortcut(name: str, input: str = "") -> str:
+        """Run one of the user's automations by name (the user is asked first): a macOS Shortcut, or on Windows a file in
+        the "BizOS Shortcuts" folder. Use list_shortcuts to see them."""
+        return await mac_tool(run, "run_shortcut", name=name, input=input)
+
+    async def list_shortcuts() -> str:
+        """List the user's Shortcuts."""
+        return await mac_tool(run, "list_shortcuts")
+
+    async def clipboard_read() -> str:
+        """Read the clipboard (the user is asked first: it may hold something private)."""
+        return await mac_tool(run, "clipboard_read")
+
+    async def clipboard_write(text: str) -> str:
+        """Put text on the clipboard so the user can paste it."""
+        return await mac_tool(run, "clipboard_write", text=text)
+
+    return [function_tool(f) for f in (app_read, app_click, app_menu, app_type, app_key, run_shortcut, list_shortcuts,
+                                       clipboard_read, clipboard_write)]
 
 
 def paypal_tools(run: Run, paypal) -> list:

@@ -39,6 +39,7 @@ export interface State {
   chrome: { connected: boolean; token?: string; outdated?: boolean }
   dictating: boolean // the OS dictation was started from BizOS (it doesn't say when it stops)
   speaking: boolean // reading an answer or a question aloud
+  question: string | null // the agent asks before a risky step (send, submit, buy, delete)
   handsFree: HandsFree
 }
 
@@ -67,13 +68,15 @@ export type Event =
   | { type: 'error'; message: string }
   | { type: 'dictate' }
   | { type: 'dictated' }
+  | { type: 'stopped' }
+  | { type: 'question'; text: string | null }
   | { type: 'speaking'; on: boolean }
   | { type: 'handsFree'; status: HandsFree }
 
 export const initial: State = {
   pill: 'idle', open: false, context: null, muted: false, goal: '', plan: null, steps: [], current: -1,
   consent: null, workspace: null, brief: '', error: null, caps: {}, online: false, alwaysCapture: false, captured: null, fresh: false, chrome: { connected: false },
-  dictating: false, speaking: false, handsFree: 'off',
+  dictating: false, speaking: false, handsFree: 'off', question: null,
 }
 
 export function reduce(s: State, e: Event): State {
@@ -121,6 +124,10 @@ export function reduce(s: State, e: Event): State {
       return { ...s, online: e.online }
     case 'dictate':
       return { ...s, dictating: true }
+    case 'question':
+      return { ...s, question: e.text }
+    case 'stopped':
+      return { ...s, steps: s.steps.map((x) => (x.status === 'running' ? { ...x, status: 'failed', note: 'stopped' } : x)) }
     case 'dictated':
       return { ...s, dictating: false }
     case 'speaking':
@@ -150,6 +157,30 @@ const NO = /\b(no|nope|cancel|stop|don'?t|abort)\b/i
 export function voiceDecision(text: string): 'yes' | 'no' | null {
   const yes = YES.test(text), no = NO.test(text)
   return yes === no ? null : yes ? 'yes' : 'no'
+}
+
+const plain = (s: string) => s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/^\s*(?:[-*•]|#+)\s+/, '').replace(/[*_`>]/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * Streaming speech: the finished sentences / bullet lines in `text` after position `from`, ready to read aloud,
+ * and where the next call should start. `final` also takes the unfinished tail (the brief is complete).
+ */
+export function speakable(text: string, from: number, final = false): { chunks: string[]; next: number } {
+  const chunks: string[] = []
+  let next = from
+  const unit = /[^\n]*?(?:[.!?](?=\s)|\*\*(?=\s)|\n)/gy // up to a sentence end or a line end
+  unit.lastIndex = from
+  for (let m = unit.exec(text); m; m = unit.exec(text)) {
+    if (!m[0]) { unit.lastIndex++; continue }
+    next = unit.lastIndex
+    const s = plain(m[0])
+    if (s) chunks.push(s)
+  }
+  if (final && next < text.length && plain(text.slice(next))) {
+    chunks.push(plain(text.slice(next)))
+    next = text.length
+  }
+  return { chunks, next }
 }
 
 /** What gets read aloud when a hands-free run finishes: the brief's bold headline (or first sentence), short. */

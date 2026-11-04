@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FOLLOW_UP_MS, heardOutcome, initial, latestStep, reduce, spokenSummary, voiceDecision, type State } from './state'
+import { FOLLOW_UP_MS, heardOutcome, initial, latestStep, reduce, speakable, spokenSummary, voiceDecision, type State } from './state'
 
 const plan = { flow: 'ceo', team: 'Executive', title: 'Is this competitor undercutting us?', subject: 'Lumen', rationale: 'r', steps: ['a', 'b', 'c'], sensed: ['app', 'url'] }
 const run = (...events: Parameters<typeof reduce>[1][]): State => events.reduce(reduce, initial)
@@ -124,6 +124,18 @@ describe('overlay state machine', () => {
     expect(run({ type: 'speaking', on: true }, { type: 'dismiss' }).speaking).toBe(false)
   })
 
+  it('a mid-run question shows until it is answered', () => {
+    const s = run({ type: 'question', text: 'Click "Send"?' })
+    expect(s.question).toBe('Click "Send"?')
+    expect(reduce(s, { type: 'question', text: null }).question).toBe(null)
+  })
+
+  it('stopping marks the running step as stopped', () => {
+    const s = run({ type: 'plan', plan }, { type: 'proceed' }, { type: 'step', index: 0, label: 'a', status: 'verified' },
+      { type: 'step', index: 1, label: 'b', status: 'running' }, { type: 'stopped' })
+    expect(s.steps.map((x) => [x.status, x.note])).toEqual([['verified', undefined], ['failed', 'stopped'], ['pending', undefined]])
+  })
+
   it('a follow-up gives up sooner on silence', () => {
     expect(heardOutcome('', 0, 0, 7000, FOLLOW_UP_MS)).toBe('wait')
     expect(heardOutcome('', 0, 0, 8000, FOLLOW_UP_MS)).toBe('nothing')
@@ -133,6 +145,17 @@ describe('overlay state machine', () => {
     for (const yes of ['Confirm', 'yes', 'Yes, do it.', 'proceed', 'go ahead']) expect(voiceDecision(yes)).toBe('yes')
     for (const no of ['cancel', 'No.', 'stop', "don't", 'no thanks']) expect(voiceDecision(no)).toBe('no')
     for (const unclear of ['', 'maybe', 'yes no', 'what did you say', "no, confirm"]) expect(voiceDecision(unclear)).toBe(null)
+  })
+
+  it('streams speech one finished sentence or bullet at a time', () => {
+    let r = speakable('**Revenue is $1.2M, up 8', 0)
+    expect(r.chunks).toEqual([]) // nothing finished yet
+    const text = '**Revenue is $1.2M, up 8%.** Mostly from Acme.\n- Acme: $300K\n- Beta'
+    r = speakable(text, 0)
+    expect(r.chunks).toEqual(['Revenue is $1.2M, up 8%.', 'Mostly from Acme.', 'Acme: $300K'])
+    const rest = speakable(text + ' Corp: $90K\n', r.next)
+    expect(rest.chunks).toEqual(['Beta Corp: $90K'])
+    expect(speakable('Next: chase [invoice #12](http://x)', 0, true).chunks).toEqual(['Next: chase invoice #12'])
   })
 
   it('speaks the headline of the brief, without markdown', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkApp, checkUrl, closeTarget, noteApp, notesHtml } from './desktop'
+import { checkApp, checkUrl, closeTarget, controllable, keyCode, modifiers, noteApp, notesHtml, parseElements } from './desktop'
 
 describe('desktop actions only accept safe input', () => {
   it('opens apps by plain name, never a path or a shell string', () => {
@@ -22,6 +22,22 @@ describe('desktop actions only accept safe input', () => {
     for (const bad of ['Finder', 'Dock', 'System Settings', 'BizOS', 'Electron', 'loginwindow', 'rm -rf ~']) {
       expect(() => closeTarget(bad, 'darwin')).toThrow()
     }
+  })
+  it('never operates shells, password managers, system settings or BizOS itself', () => {
+    for (const app of ['Terminal', 'iTerm2', 'Ghostty', 'Warp', 'Keychain Access', 'Passwords', 'System Settings', 'Script Editor', 'BizOS'])
+      expect(() => controllable(app)).toThrow(/won't operate/)
+    expect(controllable('Notes')).toBe('Notes')
+  })
+  it('maps key names to key codes and rejects unknown keys', () => {
+    expect(keyCode('return')).toBe(36)
+    expect(keyCode('Down')).toBe(125)
+    expect(() => keyCode('rm')).toThrow()
+    expect(modifiers(['cmd', 'shift'])).toBe('{command down, shift down}')
+    expect(() => modifiers(['cmd', 'hyper'])).toThrow()
+  })
+  it('parses the UI element list from the script', () => {
+    expect(parseElements('AXButton\tSend\nAXTextField\t\nAXButton\tClear\n')).toEqual([
+      { ref: 0, role: 'button', name: 'Send' }, { ref: 1, role: 'text field', name: '' }, { ref: 2, role: 'button', name: 'Clear' }])
   })
   it('opens only http(s) links', () => {
     expect(checkUrl('https://duckduckgo.com/?q=llm')).toBe('https://duckduckgo.com/?q=llm')

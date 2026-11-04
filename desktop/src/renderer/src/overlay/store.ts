@@ -4,7 +4,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import { api, bizos, config } from '../lib/bridge'
-import { FOLLOW_UP_MS, heardOutcome, initial, reduce, SILENCE_MS, spokenSummary, voiceDecision, type Caps, type Event, type State } from './state'
+import { FOLLOW_UP_MS, heardOutcome, initial, reduce, SILENCE_MS, speakable, spokenSummary, voiceDecision, type Caps, type Event, type State } from './state'
 
 let state: State = initial
 const subs = new Set<() => void>()
@@ -30,6 +30,11 @@ async function connect() {
   }
   socket.onmessage = async (m) => {
     const raw = JSON.parse(m.data)
+    if (raw.type === 'client_call' && raw.op === 'confirm') { // a risky step: ask the user, here
+      const yes = await askUser(String(raw.args?.question ?? ''))
+      socket?.send(JSON.stringify({ type: 'client_result', id: raw.id, ok: true, result: { yes } }))
+      return
+    }
     if (raw.type === 'client_call') { // the agent asks to open an app/link or read the screen; main does it
       const reply = await bizos.desktop(raw.op, raw.args)
       socket?.send(JSON.stringify({ type: 'client_result', id: raw.id, ...reply }))
@@ -48,6 +53,11 @@ async function connect() {
     else if (e.type === 'consent' && handsFree && voiceTurn) {
       void voiceConfirm(`To answer, I need a screenshot of ${e.target || 'your screen'}. Say yes, or no.`, (yes) => void actions.consent(yes))
     }
+    if (e.type === 'token' && voiceTurn) {
+      stream.text += e.text
+      speakStream()
+    }
+    if (e.type === 'brief_reset' && !stream.spoken) stream = { text: '', at: 0, spoken: 0 }
     if (e.type === 'done' && voiceTurn) void converse()
     if (e.type === 'error' && voiceTurn) {
       voiceTurn = false
@@ -80,14 +90,15 @@ export const actions = {
   summon: () => bizos.summon(),
   dismiss() {
     voiceTurn = false
-    bizos.stopSpeaking()
+    hush()
     dispatch({ type: 'dismiss' })
     bizos.dismiss()
   },
   ask(goal: string, byVoice = false) {
     if (!goal.trim()) return
     voiceTurn = byVoice // typing takes over from a spoken conversation
-    if (!byVoice) bizos.stopSpeaking()
+    stream = { text: '', at: 0, spoken: 0 }
+    if (!byVoice) hush()
     const fresh = state.fresh
     dispatch({ type: 'ask', goal })
     send({ type: 'ask', goal, context: state.context ?? {}, fresh })
@@ -95,6 +106,17 @@ export const actions = {
   proceed() {
     dispatch({ type: 'proceed' })
     send({ type: 'proceed' })
+  },
+  answer: (yes: boolean) => answer?.(yes),
+  /** Stop whatever is happening: speech, a plan being made, or a running investigation (the backend cancels it). */
+  stop() {
+    voiceTurn = false
+    hush()
+    answer?.(false)
+    lastStop = Date.now()
+    send({ type: 'stop' })
+    if (state.pill === 'thinking' && !state.steps.length) dispatch({ type: 'cancel' }) // still planning: drop it here too
+    else if (state.plan && state.steps.every((x) => x.status === 'pending')) actions.cancel()
   },
   cancel() {
     dispatch({ type: 'cancel' })
@@ -155,6 +177,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // The request in progress came by voice: answer by voice, ask confirmations by voice, and keep the conversation going.
 let voiceTurn = false
+let lastStop = 0
 
 /**
  * Dictate into the ask field until the person pauses: resolves with what they said, or null after silence (or if
@@ -189,17 +212,45 @@ async function listen(silenceMs = SILENCE_MS): Promise<string | null> {
   })
 }
 
-async function say(text: string) {
+// Speech is a queue: streamed sentences play back to back; hush() drops whatever hasn't been said yet.
+let speech: Promise<void> = Promise.resolve()
+let speechGen = 0, queued = 0
+function say(text: string): Promise<void> {
+  const gen = speechGen
+  queued++
   dispatch({ type: 'speaking', on: true })
-  await bizos.speak(text)
-  dispatch({ type: 'speaking', on: false })
+  speech = speech.then(async () => {
+    if (gen === speechGen) await bizos.speak(text)
+    if (--queued === 0) dispatch({ type: 'speaking', on: false })
+  })
+  return speech
+}
+function hush() {
+  speechGen++
+  bizos.stopSpeaking()
+}
+
+// The brief being read aloud as it streams in (voice turns only). It starts at the bold headline, so the
+// agent's thinking-aloud before its tool calls is never spoken; at most MAX_SPOKEN sentences.
+const MAX_SPOKEN = 6
+let stream = { text: '', at: 0, spoken: 0 }
+function speakStream(final = false) {
+  if (!stream.text.trimStart().startsWith('**')) return
+  const { chunks, next } = speakable(stream.text, stream.at, final)
+  stream.at = next
+  for (const c of chunks) if (stream.spoken++ < MAX_SPOKEN) void say(c)
 }
 
 /** "Hey BizOS": take the request by voice. */
 async function onWake() {
-  bizos.stopSpeaking()
+  hush()
   if (state.muted) return
-  if (state.pill === 'thinking' || state.pill === 'doing') return void say('Still working on your last request.')
+  if (state.pill === 'thinking' || state.pill === 'doing') { // maybe "Hey BizOS, stop": that word comes a moment later
+    const at = Date.now()
+    await wait(2000)
+    if (lastStop < at && (state.pill === 'thinking' || state.pill === 'doing')) await say('Still working on it. Say Hey BizOS, stop, to cancel.')
+    return
+  }
   const text = await listen()
   if (text) {
     voiceTurn = true
@@ -222,11 +273,30 @@ async function voiceConfirm(question: string, decide: (yes: boolean) => void) {
 
 /** A hands-free run finished: say the answer, then listen for a follow-up without needing "Hey BizOS" again. */
 async function converse() {
-  await say(spokenSummary(state.brief || state.workspace?.headline || ''))
+  speakStream(true) // the rest of the brief
+  if (!stream.spoken) void say(spokenSummary(state.brief || state.workspace?.headline || ''))
+  await speech
   if (!voiceTurn || state.handsFree !== 'on' || !state.open) return void (voiceTurn = false)
   const text = await listen(FOLLOW_UP_MS)
   if (text && voiceTurn) actions.ask(text, true)
   else voiceTurn = false // silence ends the conversation
+}
+
+// The answer to the question on screen: the Yes/No buttons resolve it (or a spoken answer, or a timeout).
+let answer: ((yes: boolean) => void) | null = null
+function askUser(question: string): Promise<boolean> {
+  answer?.(false) // a newer question replaces an older one
+  dispatch({ type: 'question', text: question })
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => answer?.(false), 140_000)
+    answer = (yes) => {
+      clearTimeout(timer)
+      answer = null
+      dispatch({ type: 'question', text: null })
+      resolve(yes)
+    }
+    if (voiceTurn && state.handsFree === 'on') void voiceConfirm(`${question} Say yes, or no.`, (yes) => answer?.(yes))
+  })
 }
 
 let started = false
@@ -248,8 +318,13 @@ export function start() {
   })
   // "Hey BizOS": main has already opened the panel; start dictation once the ask field is there.
   bizos.onWake(() => setTimeout(() => void onWake(), 250))
+  bizos.onStop(() => {
+    const busy = state.pill === 'thinking' || state.pill === 'doing'
+    actions.stop()
+    if (busy) void say('Stopped.')
+  })
   addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') actions.dismiss()
+    if (e.key === 'Escape') return state.pill === 'thinking' || state.pill === 'doing' || state.speaking ? actions.stop() : actions.dismiss()
     // Enter approves a plan that is waiting, without parking focus (and a focus ring) on the button.
     const waiting = state.plan && state.pill === 'listening' && state.steps.every((x) => x.status === 'pending')
     if (e.key === 'Enter' && waiting && !(e.target instanceof HTMLInputElement)) actions.proceed()

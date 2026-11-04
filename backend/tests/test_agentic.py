@@ -150,6 +150,47 @@ async def test_new_topic_or_remove_leaves_the_current_workspace(monkeypatch):
         assert ("old" in session.workspaces) == kept
 
 
+async def test_stop_cancels_a_running_investigation_and_keeps_what_finished(monkeypatch):
+    import asyncio
+    from bizos import agent
+    session = agent.Session({})
+    reached = asyncio.Event()
+
+    async def slow_analyse(run, plan, brief, queue):
+        brief["text"] = "Found 3 suppliers so far."
+        reached.set()
+        await asyncio.sleep(30)  # a long tool call: stop must not wait for it
+    monkeypatch.setattr(session, "analyse", slow_analyse)
+    monkeypatch.setattr(agent.llm, "model", lambda: object())
+    plan = {"flow": "general", "goal": "g", "context": {}, "items": tools.validate_plan("general", []), "subject": "Suppliers",
+            "title": "t", "agentic": True, "workspace": "keep"}
+
+    async def collect():
+        return [e async for e in session.act(plan)]
+    task = asyncio.create_task(collect())
+    await asyncio.wait_for(reached.wait(), 2)
+    session.stop()
+    events = await asyncio.wait_for(task, 2)
+    kinds = [e["type"] for e in events]
+    assert "stopped" in kinds and kinds[-1] == "done"
+    ws = session.workspace
+    assert ws["complete"] and ws["narrative"].startswith("**Stopped at your request.**") and "3 suppliers" in ws["narrative"]
+
+
+async def test_stop_while_planning_drops_the_plan(monkeypatch):
+    import asyncio
+    from bizos import agent
+    session = agent.Session({})
+
+    async def slow_plan(ask):
+        session.stop()  # the user says stop while the planner is still thinking
+        return {"flow": "general", "subject": "s", "rationale": "r", "steps": [], "needs_screenshot": False}
+    monkeypatch.setattr(session, "plan_with_agent", slow_plan)
+    monkeypatch.setattr(agent.llm, "model", lambda: object())
+    events = [e async for e in session.ask({"goal": "g", "context": {}})]
+    assert events == [] and session.plan is None
+
+
 async def test_agent_designs_the_canvas_with_tools():
     from bizos import compiler
     ws = compiler.new_workspace("d1")

@@ -2,7 +2,7 @@
  * Electron main: the floating overlay (pill), the workspace window, the global hotkey, OS sensing,
  * and the local backend process. Secrets other than the AG Studio key never reach a renderer.
  */
-import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeImage, screen, shell } from 'electron'
+import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeImage, screen, shell, systemPreferences } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -73,6 +73,7 @@ function startWake() {
     if (line !== 'wake') console.log(`[bizos] hands-free: ${line}`)
     else console.log('[bizos] hands-free: heard "Hey BizOS"')
     if (line === 'wake') speaker.stop() // talking over BizOS interrupts it
+    if (line === 'stop') overlay?.webContents.send('stop') // "Hey BizOS, stop"
     if (line === 'wake') void summon().then(() => overlay?.webContents.send('wake'))
     else if (line === 'status listening') handsFree('on')
     else if (line.startsWith('error ')) error = line.slice(6)
@@ -111,6 +112,7 @@ function createOverlay() {
     transparent: true, frame: false, resizable: false, hasShadow: false, skipTaskbar: true, fullscreenable: false,
     alwaysOnTop: true, show: false, backgroundColor: '#00000000',
     ...(process.platform === 'darwin' ? { type: 'panel' } : {}), // non-activating: the user's app stays frontmost
+    ...(process.platform === 'win32' ? { focusable: false } : {}), // Windows has no such panel: unfocusable until used (untested)
     webPreferences: prefs,
   })
   // No setContentProtection: the overlay stays visible to screen sharing on purpose.
@@ -148,17 +150,27 @@ async function summon() {
   const off = !!ctx.app && settings.muted.includes(ctx.app)
   overlay?.webContents.send('summon', off ? { app: ctx.app, off } : ctx) // muted apps: nothing leaves main
   overlay?.setIgnoreMouseEvents(false)
+  focusable(true)
   overlay?.show()
   overlay?.focus()
 }
 
+// Windows: the overlay only becomes focusable while it is being used, so it never takes focus from the user's app
+// just by being on screen (macOS gets this from the non-activating panel).
+const focusable = (on: boolean) => process.platform === 'win32' && overlay?.setFocusable(on)
+
 ipcMain.handle('config', () => config)
 ipcMain.handle('capture', () => sense.capture())
 ipcMain.on('summon', () => void summon())
-ipcMain.on('interactive', (_e, on: boolean) => overlay?.setIgnoreMouseEvents(!on, { forward: true }))
+ipcMain.on('quit', () => app.quit()) // stops the backend, the hands-free listener and speech too (will-quit)
+ipcMain.on('interactive', (_e, on: boolean) => {
+  overlay?.setIgnoreMouseEvents(!on, { forward: true })
+  if (on) focusable(true)
+})
 ipcMain.on('dismiss', () => {
   overlay?.setIgnoreMouseEvents(true, { forward: true })
   overlay?.blur()
+  focusable(false)
 })
 // Drag: native drag regions don't work in a click-through panel. The grip sends its pointer offset; no offset = start.
 let origin = [0, 0]
@@ -182,7 +194,10 @@ ipcMain.handle('desktop', async (_e, op: string, args: Record<string, string>) =
   try {
     return { ok: true, result: await desktop(op, args) }
   } catch (e) {
-    return { ok: false, error: String((e as Error).message) }
+    const error = String((e as Error).message)
+    // First Mac-control action without permission: show macOS's own Accessibility prompt (it opens Settings).
+    if (error.startsWith('ACCESSIBILITY') && process.platform === 'darwin') systemPreferences.isTrustedAccessibilityClient(true)
+    return { ok: false, error }
   }
 })
 ipcMain.on('mute', (_e, appName: string, off = true) => {
@@ -205,6 +220,7 @@ ipcMain.on('always-capture',(_e, on: boolean) => {
 ipcMain.handle('dictate', async () => {
   // Dictation types into the key window of the ACTIVE app; the overlay is a non-activating panel, so activate first.
   // Activation is asynchronous and sometimes needs a second nudge; dictation started before it lands goes nowhere.
+  focusable(true)
   for (let i = 0; i < 10 && !overlay?.isFocused(); i++) {
     app.focus({ steal: true })
     overlay?.focus()

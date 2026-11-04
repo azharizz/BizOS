@@ -29,6 +29,8 @@ export interface Bridge {
   summon: () => void
   setInteractive: (on: boolean) => void
   dismiss: () => void
+  /** Quit BizOS entirely. */
+  quit: () => void
   /** Hand keyboard focus back to the user's app (ends an OS dictation). */
   release: () => void
   drag: (dx?: number, dy?: number) => void
@@ -45,6 +47,8 @@ export interface Bridge {
   /** Listener status ('starting' | 'on' | 'off'), with a message when it stopped on an error. */
   onHandsFree: (fn: (status: 'off' | 'starting' | 'on', error?: string) => void) => void
   onWake: (fn: () => void) => void
+  /** "Hey BizOS, stop" was heard. */
+  onStop: (fn: () => void) => void
   desktop: (op: string, args: Record<string, string>) => Promise<{ ok: boolean; result?: unknown; error?: string }>
   openExternal: (url: string) => void
   openInChrome: (url: string) => void

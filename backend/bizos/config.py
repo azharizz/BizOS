@@ -24,3 +24,4 @@ PAYPAL_BASE_URL = _env.get("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com"
 EXTENSION_TOKEN = _env.get("BIZOS_EXTENSION_TOKEN", "")
 DB_PATH = Path(_env.get("BIZOS_DB", ROOT / "data" / "mock" / "bizos.db"))
 AUDIT_PATH = Path(_env.get("BIZOS_AUDIT", ROOT / "app" / "backend" / "audit.jsonl"))
+MEMORY_PATH = Path(_env.get("BIZOS_MEMORY", Path.home() / ".bizos" / "memory.db"))  # long-term memory, local

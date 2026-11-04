@@ -84,7 +84,14 @@ async function handle({ op, args }) {
   if (op === 'open') return openAndRead(String(args.url), 'snapshot')
   if (op === 'search') return openAndRead(`https://www.google.com/search?q=${encodeURIComponent(String(args.query))}`, 'results')
   const tab = await activeTab()
-  return ask(tab, op, args)
+  const reply = await ask(tab, op, args)
+  // A click or a submit may load a new page: wait for it, then say where we are now.
+  if (reply?.ok && (op === 'click' || (op === 'type' && args.submit))) {
+    await Promise.race([loaded(tab.id, 8000), new Promise((r) => setTimeout(r, 1200))])
+    const now = await chrome.tabs.get(tab.id)
+    reply.result = { ...reply.result, url: now.url, title: now.title }
+  }
+  return reply
 }
 
 // MV3 workers sleep: keep the socket busy while open, and retry every minute while closed.

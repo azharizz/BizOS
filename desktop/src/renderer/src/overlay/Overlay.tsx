@@ -53,8 +53,11 @@ function Pill({ s }: { s: State }) {
           </AnimatePresence>
         </span>
         <span className="ind" aria-hidden><i /><i /><i /></span>
-        {s.pill === 'idle' && <kbd className="pill-kbd">{s.handsFree === 'on' ? '“Hey BizOS”' : '⌘⇧␣'}</kbd>}
+        {s.pill === 'idle' && !s.speaking && <kbd className="pill-kbd">{s.handsFree === 'on' ? '“Hey BizOS”' : '⌘⇧␣'}</kbd>}
       </button>
+      {(busy || s.speaking) && (
+        <button className="pill-stop" onClick={actions.stop} aria-label="Stop" title="Stop (Esc, or say “Hey BizOS, stop”)"><i /></button>
+      )}
     </motion.div>
   )
 }
@@ -75,6 +78,7 @@ function Panel({ s }: { s: State }) {
           <AnimatePresence mode="popLayout" initial={false}>
             {s.error && <motion.p key="err" className="note-error" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>{s.error}</motion.p>}
             {s.consent && <Consent key="consent" s={s} />}
+            {s.question && <Question key="question" text={s.question} />}
             {s.pill === 'thinking' && !s.plan && <Thinking key="thinking" />}
             {s.plan && <PlanCard key="plan" s={s} />}
           </AnimatePresence>
@@ -86,6 +90,7 @@ function Panel({ s }: { s: State }) {
         <span className="grow" />
         <HandsFree s={s} />
         <ChromeLink s={s} />
+        <button className="chrome-link quit" onClick={() => bizos.quit()} title="Quit BizOS (stops the engine and the mic)">Quit</button>
       </footer>
     </motion.section>
   )
@@ -170,6 +175,21 @@ function Thinking() {
     <motion.div className="thinking" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       {[0, 1, 2].map((i) => <span key={i} className="bar" style={{ animationDelay: `${i * 0.12}s` }} />)}
       <em>Reading context, choosing the right investigation…</em>
+    </motion.div>
+  )
+}
+
+/** The agent is about to do something that sends, submits, buys or deletes: it waits for this answer. */
+function Question({ text }: { text: string }) {
+  return (
+    <motion.div className="card consent" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={soft}>
+      <h3>Go ahead?</h3>
+      <p>{text}</p>
+      <div className="row">
+        <button className="btn ghost" onClick={() => actions.answer(false)}>No</button>
+        <span className="grow" />
+        <button className="btn" onClick={() => actions.answer(true)}>Yes, do it</button>
+      </div>
     </motion.div>
   )
 }

@@ -21,9 +21,26 @@ def test_heard_matches_only_the_wake_phrase():
     ("Hey boss", False), ("hey, these old shoes", False), ("the bus is late again", False), ("Hey Siri", False),
 ])
 def test_real_speech(tmp_path, phrase, expected):
+    assert wake.detect(wake.recognizer(), speech(tmp_path, phrase)) == expected
+
+
+def speech(tmp_path, phrase):
     aiff, wav = tmp_path / "s.aiff", tmp_path / "s.wav"
     subprocess.run(["say", "-o", aiff, phrase], check=True)
     subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", aiff, wav], check=True)
     w = wave.open(str(wav))
-    chunks = iter(lambda: w.readframes(4000), b"")
-    assert wake.detect(wake.recognizer(), chunks) == expected
+    return iter(lambda: w.readframes(4000), b"")
+
+
+def test_stop_words():
+    assert wake.stopped("hey biz oh s stop") and wake.stopped("cancel")
+    assert not wake.stopped("hey biz oh s") and not wake.stopped("[unk]")
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("say") or not wake.MODEL.exists(), reason="needs macOS say + model")
+@pytest.mark.parametrize("phrase,expected", [("Hey BizOS, stop", True), ("Hey BizOS, cancel that", True),
+                                             ("Hey BizOS, what is our revenue", False)])
+def test_stop_right_after_the_wake_phrase(tmp_path, phrase, expected):
+    rec, chunks = wake.recognizer(), speech(tmp_path, phrase)
+    assert wake.detect(rec, chunks)
+    assert wake.follow(rec, chunks) == expected

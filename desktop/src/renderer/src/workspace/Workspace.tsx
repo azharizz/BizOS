@@ -59,6 +59,7 @@ function View({ id }: { id: string }) {
         <span className="crumb">Workspace</span>
         {!m.complete && <span className="crumb-tag live-tag"><i className="live" />Agent editing</span>}
         <span className="grow" />
+        <History current={id} />
         <div className="seg" role="radiogroup" aria-label="Canvas mode">
           {(['view', 'edit'] as const).map((x) => (
             <button key={x} role="radio" aria-checked={mode === x} onClick={() => { editing = x === 'edit'; setMode(x) }}>
@@ -101,6 +102,44 @@ function View({ id }: { id: string }) {
           )}
         </aside>
       </div>
+    </div>
+  )
+}
+
+type Past = { id: string; title: string; headline: string; updated: number }
+const ago = (t: number) => {
+  const m = Math.round((Date.now() / 1000 - t) / 60)
+  return m < 60 ? `${Math.max(m, 1)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`
+}
+
+/** Every workspace is kept (local memory): reopen or search old ones. Opening one switches this window to it. */
+function History({ current }: { current: string }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const list = useQuery({
+    queryKey: ['history', q], enabled: open, placeholderData: keepPreviousData,
+    queryFn: () => api<Past[]>(`/workspaces${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`),
+  })
+  return (
+    <div className="history">
+      <button className="history-btn" aria-expanded={open} onClick={() => setOpen(!open)}>History</button>
+      {open && (
+        <motion.div className="history-pop" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease }}>
+          <input autoFocus placeholder="Search past workspaces…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <ul>
+            {(list.data ?? []).map((w) => (
+              <li key={w.id}>
+                <button disabled={w.id === current} onClick={() => { location.hash = `/w/${w.id}` }}>
+                  <b>{w.title || 'Untitled'}</b>
+                  <span>{w.headline || ' '}</span>
+                  <i>{w.id === current ? 'open' : ago(w.updated)}</i>
+                </button>
+              </li>
+            ))}
+            {list.data?.length === 0 && <li className="history-empty">Nothing found.</li>}
+          </ul>
+        </motion.div>
+      )}
     </div>
   )
 }

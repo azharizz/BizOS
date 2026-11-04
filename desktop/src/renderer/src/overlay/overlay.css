@@ -37,6 +37,12 @@
 }
 .pill-label > span { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; }
 .pill-kbd { margin-left: 2px; }
+.pill-stop {
+  display: grid; place-items: center; width: 26px; height: 26px; margin: 0 2px 0 -2px; padding: 0; border: 0;
+  border-radius: 50%; background: rgba(236, 232, 223, 0.08); transition: background 0.2s;
+}
+.pill-stop i { width: 8px; height: 8px; border-radius: 2px; background: var(--paper); }
+.pill-stop:hover { background: rgba(210, 63, 74, 0.32); }
 .pill[data-online='false'] .pill-label { color: var(--mute); }
 
 /* listening: a held breath of signal */
@@ -219,6 +225,7 @@
 .chrome-link { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; font: inherit; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: 6px; }
 .chrome-link:hover { color: var(--paper); border-color: var(--line-2); }
 .chrome-link[data-on='true'] { color: var(--ok); }
+.chrome-link.quit:hover { color: var(--paper); border-color: rgba(210, 63, 74, 0.55); background: rgba(210, 63, 74, 0.14); }
 .chrome-link[data-warn] { color: #f5c46b; border-color: rgba(245, 196, 107, 0.4); }
 .tag.agent { color: var(--ok); background: rgba(127, 216, 166, 0.1); }
 

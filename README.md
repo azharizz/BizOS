@@ -44,6 +44,24 @@ flows), or something else entirely (`general`: the agent writes its own queries 
 - **Screenshots (L3):** asked every time (No / Yes, once / **Always yes**). Always yes is global; turn it off from the
   mint `L3 auto` badge. Every automatic capture is shown on the plan card.
 
+**What the agent can operate** (each step shows live; steps that send, submit, buy or delete always ask first, by
+click or by voice):
+- **Chrome pages** (extension 0.3): numbered page controls; click, type, choose, scroll. Search boxes submit freely;
+  other submits and risky buttons ask. Never types into password or payment fields.
+- **Mac apps** (Accessibility permission, once): read an app's controls and on-screen text, click by name, menus,
+  type (via paste, any language), keys, your Shortcuts, clipboard. Return in messaging apps, Shortcuts and reading
+  the clipboard ask first. Never operates terminals, password managers, System Settings or BizOS itself. Finder works:
+  moving to Trash and Delete ask first.
+- **Windows** (written, not yet run on a PC): the same app tools through Windows UI Automation + SendKeys; your
+  automations live in a `BizOS Shortcuts` folder in your user folder (.lnk, .url, .bat, .cmd, .ps1, always asked);
+  the overlay stays unfocusable until you use it. Never operates PowerShell/cmd/Terminal, the registry, Task Manager,
+  Settings or the credential store.
+- **Stop anytime**: the pill's stop button, Esc, or "Hey BizOS, stop". Finished steps are kept.
+
+**Memory** (`~/.bizos/memory.db`, local only, SQLite full-text search): every workspace is saved and reloaded
+after a restart (History menu in the workspace window); the agent remembers facts you tell it ("remember that…")
+and can reopen a past workspace ("continue my LLM pricing workspace").
+
 **Chrome extension:** `chrome://extensions` → Developer mode → Load unpacked → `app/chrome_extension`.
 In the overlay footer click **Pair Chrome** (copies the token), paste it in the extension's Settings.
 Chrome asks once to allow **local network access**: click Allow (the bridge is 127.0.0.1).

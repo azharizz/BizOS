@@ -22,12 +22,28 @@ MODEL = Path.home() / ".bizos" / "models" / NAME
 URL = f"https://alphacephei.com/vosk/models/{NAME}.zip"
 RATE = 16000
 # "BizOS" isn't an English word; spelled as the model hears it.
-GRAMMAR = ["hey biz oh s", "okay biz oh s", "[unk]"]
+GRAMMAR = ["hey biz oh s", "okay biz oh s", "stop", "cancel", "[unk]"]
 COOLDOWN = 3  # seconds: ignore the tail of the same "Hey BizOS"
+FOLLOW_CHUNKS = 7  # ~1.75 s after the wake phrase in which "stop" / "cancel" counts
 
 
 def heard(text: str) -> bool:
     return "biz oh s" in text
+
+
+def stopped(text: str) -> bool:
+    """Only meaningful right after the wake phrase ("Hey BizOS, stop"): a lone "stop" in conversation never acts."""
+    return "stop" in text.split() or "cancel" in text.split()
+
+
+def follow(rec: vosk.KaldiRecognizer, chunks) -> bool:
+    """After a wake: did the person go on to say "stop" / "cancel"?"""
+    for _, chunk in zip(range(FOLLOW_CHUNKS), chunks):
+        done = rec.AcceptWaveform(chunk)
+        if stopped(json.loads(rec.Result() if done else rec.PartialResult()).get("text" if done else "partial", "")):
+            rec.Reset()
+            return True
+    return stopped(json.loads(rec.FinalResult())["text"])
 
 
 def recognizer() -> vosk.KaldiRecognizer:
@@ -63,6 +79,8 @@ def main():
         while True:
             if detect(rec, iter(q.get, None)):
                 print("wake", flush=True)
+                if follow(rec, iter(q.get, None)):
+                    print("stop", flush=True)
                 time.sleep(COOLDOWN)
                 with q.mutex:
                     q.queue.clear()

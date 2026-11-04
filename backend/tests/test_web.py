@@ -158,3 +158,88 @@ async def test_pinned_findings_are_chartable_immediately_during_the_run():
     await tools.run_sql_tool(run, "SELECT name, monthly_budget FROM departments", "Budgets", pin=True)
     wid = run.canvas.add({"kind": "bar", "source": "cheapest_new_llms", "x": "model", "y": ["input_usd"], "title": "Price"})
     assert wid and run.canvas.source("budgets")
+
+
+def fake_page(monkeypatch, elements):
+    from bizos import bridge
+    calls = []
+
+    async def request(op, args=None, timeout=6):
+        calls.append((op, args))
+        if op == "risk":
+            e = elements[args["ref"]]
+            return {"label": e["label"], "risky": e.get("risky", False), "blocked": e.get("blocked", False)}
+        return {"ok": True, "url": "https://shop.example/cart", "title": "Cart"}
+    monkeypatch.setattr(bridge.hub, "socket", object())
+    monkeypatch.setattr(tools.hub, "request", request)
+    return calls
+
+
+async def test_page_click_runs_plain_clicks_but_asks_before_risky_ones(monkeypatch):
+    calls = fake_page(monkeypatch, {1: {"label": "Show more"}, 2: {"label": "Place order", "risky": True}})
+    asked = []
+
+    async def confirm(question):
+        asked.append(question)
+        return False  # the user says no
+    run, events, _ = run_with_client({})
+    run.confirm = confirm
+    await tools.page_click_tool(run, 1)
+    assert ("click", {"ref": 1}) in calls and asked == []
+    out = await tools.page_click_tool(run, 2)
+    assert "declined" in out and ("click", {"ref": 2}) not in calls
+    assert "Place order" in asked[0]
+
+
+async def test_risky_actions_are_refused_when_nobody_can_confirm(monkeypatch):
+    calls = fake_page(monkeypatch, {2: {"label": "Send", "risky": True}})
+    run, _, _ = run_with_client({})  # no confirm channel
+    out = await tools.page_click_tool(run, 2)
+    assert "declined" in out and ("click", {"ref": 2}) not in calls
+
+
+async def test_page_type_never_touches_blocked_fields_and_confirms_submit(monkeypatch):
+    calls = fake_page(monkeypatch, {3: {"label": "Password", "blocked": True}, 4: {"label": "Search"}})
+    run, _, _ = run_with_client({})
+    assert "never" in (await tools.page_type_tool(run, 3, "hunter2")) and not any(c[0] == "type" for c in calls)
+    await tools.page_type_tool(run, 4, "cold brew")
+    assert ("type", {"ref": 4, "text": "cold brew", "submit": False}) in calls
+
+    async def yes(question):
+        return True
+    run.confirm = yes
+    await tools.page_type_tool(run, 4, "tea", submit=True)
+    assert ("type", {"ref": 4, "text": "tea", "submit": True}) in calls
+
+
+async def test_mac_control_asks_before_risky_steps():
+    run, events, calls = run_with_client({op: {"ok": True} for op in
+                                          ("ui_click", "ui_menu", "press_key", "type_text", "run_shortcut", "clipboard_read")})
+    asked = []
+
+    async def no(question):
+        asked.append(question)
+        return False
+    run.confirm = no
+    await tools.mac_tool(run, "ui_click", app="Notes", name="New Note")         # plain: no question
+    await tools.mac_tool(run, "type_text", app="Notes", text="hello")
+    assert [c[0] for c in calls] == ["ui_click", "type_text"] and asked == []
+    for op, args in [("ui_click", {"app": "Mail", "name": "Send"}), ("ui_menu", {"app": "Finder", "menu": "File", "item": "Move to Trash"}),
+                     ("press_key", {"app": "Slack", "key": "return"}), ("press_key", {"app": "Notes", "key": "delete", "modifiers": "cmd"}),
+                     ("run_shortcut", {"name": "Morning routine"}), ("clipboard_read", {})]:
+        out = await tools.mac_tool(run, op, **args)
+        assert "declined" in out, op
+    assert len(asked) == 6 and [c[0] for c in calls] == ["ui_click", "type_text"]  # none of the risky ones ran
+
+
+async def test_return_in_a_non_messaging_app_is_not_risky():
+    run, _, calls = run_with_client({"press_key": {"ok": True}})
+    await tools.mac_tool(run, "press_key", app="Numbers", key="return")
+    assert calls == [("press_key", {"app": "Numbers", "key": "return"})]
+
+
+async def test_delete_in_finder_or_explorer_asks_first():
+    run, _, calls = run_with_client({"press_key": {"ok": True}})
+    for app in ("Finder", "File Explorer"):
+        assert "declined" in await tools.mac_tool(run, "press_key", app=app, key="delete")
+    assert calls == []

@@ -3,12 +3,15 @@
  * No clicking or typing in other apps: a note is always a NEW document, created through the app's own scripting.
  * Inputs are validated and passed as arguments, never through a shell or spliced into a script.
  */
-import { shell } from 'electron'
+import { clipboard, shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '../shared/types'
+import { sendKeys, winControl } from './control-win'
+
+const WIN = process.platform === 'win32' // app control: macOS UI scripting, or Windows UI Automation (control-win.ts)
 
 /** Which notes app to write into. "Notepad" on a Mac means TextEdit. */
 export function noteApp(name: string, platform: string): 'TextEdit' | 'Notes' | 'Notepad' {
@@ -28,6 +31,119 @@ export function closeTarget(name: string, platform: string): string {
   if (NEVER_CLOSE.test(app)) throw new Error(`BizOS won't close ${app}`)
   return platform !== 'win32' && /notepad/i.test(app) ? 'TextEdit' : app
 }
+
+// ---------------- Mac control (System Events UI scripting; needs Accessibility permission once)
+// Shells, password stores, system settings and BizOS itself are never operated: those are the places where a
+// misread instruction could do the most damage. (Finder is allowed: moving to Trash and Cmd+Delete are asked first.)
+const NEVER_OPERATE = new RegExp('^(terminal|iterm2?|ghostty|warp|alacritty|kitty|hyper|keychain access|passwords|1password.*|bitwarden|' +
+  'system settings|system preferences|script editor|automator|shortcuts|bizos|electron|loginwindow|' +
+  // Windows: shells, the registry, Task Manager, Settings, the credential store
+  'powershell|pwsh|cmd|command prompt|windows terminal|wt|regedit|registry editor|task manager|taskmgr|control panel|settings|credential manager)$', 'i')
+
+export function controllable(name: string): string {
+  const app = checkApp(name.trim())
+  if (NEVER_OPERATE.test(app)) throw new Error(`BizOS won't operate ${app}`)
+  return app
+}
+
+const KEYS: Record<string, number> = {
+  return: 36, enter: 76, tab: 48, space: 49, delete: 51, backspace: 51, escape: 53, esc: 53, forwarddelete: 117,
+  left: 123, right: 124, down: 125, up: 126, home: 115, end: 119, pageup: 116, pagedown: 121,
+}
+export function keyCode(name: string): number {
+  const code = KEYS[name.toLowerCase().replace(/[\s_-]/g, '')]
+  if (code === undefined) throw new Error(`unknown key ${name.slice(0, 20)}`)
+  return code
+}
+const MODS: Record<string, string> = { cmd: 'command', command: 'command', shift: 'shift', option: 'option', alt: 'option', ctrl: 'control', control: 'control' }
+export function modifiers(list: string[] = []): string {
+  if (!list.length) return ''
+  return '{' + list.map((m) => {
+    const x = MODS[m.toLowerCase()]
+    if (!x) throw new Error(`unknown modifier ${m.slice(0, 20)}`)
+    return `${x} down`
+  }).join(', ') + '}'
+}
+
+const ROLES: Record<string, string> = {
+  AXButton: 'button', AXTextField: 'text field', AXTextArea: 'text area', AXCheckBox: 'checkbox', AXRadioButton: 'radio',
+  AXStaticText: 'text', AXPopUpButton: 'pop-up', AXMenuButton: 'menu button',
+  // Windows UI Automation control types
+  Button: 'button', Edit: 'text field', Document: 'text area', CheckBox: 'checkbox', RadioButton: 'radio', ComboBox: 'combo box',
+  Hyperlink: 'link', TabItem: 'tab', MenuItem: 'menu item', ListItem: 'list item', Text: 'text', AXLink: 'link', AXTab: 'tab', AXComboBox: 'combo box', AXSearchField: 'search field',
+}
+export function parseElements(out: string) {
+  return out.split('\n').filter((l) => l.includes('\t')).map((l, ref) => {
+    const [role, name] = l.split('\t')
+    return { ref, role: ROLES[role] ?? role, name: (name ?? '').trim() }
+  })
+}
+
+const ACCESSIBILITY = 'ACCESSIBILITY: allow BizOS in System Settings → Privacy & Security → Accessibility'
+const osa = (script: string, ...args: string[]) =>
+  new Promise<string>((resolve, reject) => execFile('osascript', ['-e', `on run argv\n${script}\nend run`, ...args],
+    { timeout: 25_000 }, (e, out, err) => {
+      if (!e) return resolve(String(out))
+      const msg = String(err || e.message)
+      reject(new Error(/-25211|not allowed assistive|NO-WINDOW/.test(msg) ? ACCESSIBILITY
+        : msg.trim().split('\n')[0].replace(/^\d+:\d+: execution error: /, '')))
+    }))
+
+// Walks the front window once and lists (or clicks) the controls; capped so a huge window can't stall it.
+// Without Accessibility permission System Events sees no windows at all, hence NO-WINDOW -> ask for permission.
+const WALK = `set appName to item 1 of argv
+set target to item 2 of argv
+tell application appName to activate
+delay 0.4
+tell application "System Events"
+tell process appName
+  if (count of windows) is 0 then error "NO-WINDOW"
+  set out to ""
+  set n to 0
+  set els to entire contents of front window
+  repeat with i from 1 to (count of els)
+    set e to item i of els
+    try
+      set r to role of e
+      if r is "AXStaticText" and target is "" then
+        try
+          set v to (value of e) as text
+          if v is not "missing value" and v is not "" then
+            set out to out & r & tab & v & linefeed
+            set n to n + 1
+          end if
+        end try
+      else if r is in {"AXButton","AXTextField","AXTextArea","AXCheckBox","AXRadioButton","AXPopUpButton","AXMenuButton","AXLink","AXTab","AXComboBox","AXSearchField"} then
+        set nm to ""
+        try
+          set nm to (name of e) as text
+        end try
+        if nm is "missing value" or nm is "" then
+          try
+            set nm to (description of e) as text
+          end try
+        end if
+        if nm is "missing value" then set nm to ""
+        if nm is "" or nm is "button" then
+          try
+            set nm to (value of attribute "AXIdentifier" of e) as text
+          end try
+          if nm is "missing value" then set nm to ""
+        end if
+        if target is not "" and nm is target then
+          click e
+          return "clicked" & tab & r
+        end if
+        set out to out & r & tab & nm & linefeed
+        set n to n + 1
+        if n > 150 then exit repeat
+      end if
+    end try
+  end repeat
+  if target is not "" then error "no control named " & target
+  return out
+end tell
+end tell`
 
 export const notesHtml =(text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
@@ -95,6 +211,76 @@ export function createDesktop(read: () => Promise<Context>) {
         await exec('osascript', ['-e', `on run argv\ntell application (item 1 of argv) to quit${drop ? ' saving no' : ''}\nend run`, app])
       }
       return { app, closed: true, discarded: drop }
+    },
+    // ---- Mac control
+    async ui_read({ app }) {
+      const a = controllable(app)
+      return { app, elements: parseElements(WIN ? await winControl.read(a) : await osa(WALK, a, '')) }
+    },
+    async ui_click({ app, name }) {
+      if (!name?.trim()) throw new Error('which control? give its name from ui_read')
+      const a = controllable(app)
+      const [, role] = (WIN ? await winControl.click(a, name.trim()) : await osa(WALK, a, name.trim())).trim().split('\t')
+      return { app, clicked: name, role: ROLES[role] ?? role }
+    },
+    async ui_menu({ app, menu, item }) {
+      if (WIN) {
+        await winControl.menu(controllable(app), String(menu), String(item))
+        return { app, menu, item }
+      }
+      await osa(`tell application (item 1 of argv) to activate
+delay 0.3
+tell application "System Events" to tell process (item 1 of argv) to click menu item (item 3 of argv) of menu (item 2 of argv) of menu bar 1`,
+      controllable(app), String(menu), String(item))
+      return { app, menu, item }
+    },
+    // Typing goes through the clipboard (paste): exact text in any language, then the old clipboard is put back.
+    async type_text({ app, text }) {
+      if (!text || text.length > 5000) throw new Error('text must be 1-5,000 characters')
+      const before = await clipboard.readText() // async in Electron 45
+      clipboard.writeText(text)
+      try {
+        if (WIN) await winControl.paste(controllable(app))
+        else await osa('tell application (item 1 of argv) to activate\ndelay 0.3\ntell application "System Events" to keystroke "v" using command down', controllable(app))
+        await new Promise((r) => setTimeout(r, 250))
+      } finally {
+        clipboard.writeText(before)
+      }
+      return { app, typed: text.length }
+    },
+    async press_key({ app, key, modifiers: mods }) {
+      const list = mods ? String(mods).split(',').map((m) => m.trim()).filter(Boolean) : []
+      if (WIN) {
+        await winControl.keys(controllable(app), sendKeys(key ?? '', list))
+        return { app, pressed: [...list, key].join('+') }
+      }
+      const using = modifiers(list)
+      const single = /^[a-z0-9]$/i.test(key ?? '')
+      const press = single ? 'keystroke (item 2 of argv)' : `key code ${keyCode(key ?? '')}`
+      await osa(`tell application (item 1 of argv) to activate\ndelay 0.2\ntell application "System Events" to ${press}${using ? ` using ${using}` : ''}`,
+        controllable(app), single ? key.toLowerCase() : '')
+      return { app, pressed: [...list, key].join('+') }
+    },
+    async run_shortcut({ name, input }) {
+      if (!/^[\p{L}\p{N} .&+'()-]{1,80}$/u.test(name ?? '')) throw new Error('not a shortcut name')
+      if (WIN) return { shortcut: name, output: (await winControl.runShortcut(name, input)).slice(0, 4000) }
+      const out = await new Promise<string>((resolve, reject) => {
+        const p = execFile('shortcuts', ['run', name, ...(input ? ['--input-path', '-'] : [])], { timeout: 60_000 },
+          (e, o, err) => (e ? reject(new Error(String(err || e.message).trim().split('\n')[0])) : resolve(String(o))))
+        if (input) p.stdin?.end(String(input))
+      })
+      return { shortcut: name, output: out.slice(0, 4000) }
+    },
+    async list_shortcuts() {
+      if (WIN) return { shortcuts: winControl.listShortcuts(), folder: 'BizOS Shortcuts (in your user folder)' }
+      const out = await new Promise<string>((resolve, reject) =>
+        execFile('shortcuts', ['list'], { timeout: 15_000 }, (e, o) => (e ? reject(e) : resolve(String(o)))))
+      return { shortcuts: out.split('\n').filter(Boolean).slice(0, 200) }
+    },
+    clipboard_read: async () => ({ text: (await clipboard.readText()).slice(0, 8000) }),
+    async clipboard_write({ text }) {
+      clipboard.writeText(String(text ?? '').slice(0, 20_000))
+      return { written: String(text ?? '').length }
     },
     async write_note({ app, text }) {
       const target = noteApp(app ?? '', process.platform)
