@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/bizos-banner.png" alt="BizOS: Ask. Check. Approve." width="100%">
+  <img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/bizos-banner.png" alt="BizOS: Ask. Check. Approve." width="100%">
 </p>
 
 # BizOS
@@ -16,7 +16,7 @@ BizOS answers all three from one question. An AI agent checks real suppliers in 
 </p>
 
 <p align="center">
-  <img src="assets/film-hero.gif" alt="BizOS in 12 seconds" width="80%">
+  <img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/film-hero.gif" alt="BizOS in 12 seconds" width="80%">
 </p>
 
 ## Inspiration
@@ -24,7 +24,7 @@ BizOS answers all three from one question. An AI agent checks real suppliers in 
 Small businesses are owed **$355 billion** in unpaid invoices (36.2M US small businesses × 56% owed × $17,500 average, from SBA 2026 and Intuit QuickBooks 2025). Owners lose about **4 hours a week** chasing payments (Sage 2025).
 
 <p align="center">
-  <img src="assets/gif-problem.gif" alt="$355B waiting" width="72%">
+  <img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-problem.gif" alt="$355B waiting" width="72%">
 </p>
 
 We started with **procurement**, because it's where stock, suppliers, invoices and cash all meet. Every decision there ends as a payment, yet the facts live in three places that don't talk: supplier websites, spreadsheets, and PayPal. We wanted one question to replace twelve tabs, **without ever letting an AI move money on its own.**
@@ -42,16 +42,16 @@ We started with **procurement**, because it's where stock, suppliers, invoices a
 
 <table>
 <tr>
-<td width="50%"><img src="assets/gif-ask.gif" width="100%"><br><sub><b>Ask, and see the plan first.</b></sub></td>
-<td width="50%"><img src="assets/gif-agentic.gif" width="100%"><br><sub><b>Reads real supplier pages; asks before it orders.</b></sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-ask.gif" width="100%"><br><sub><b>Ask, and see the plan first.</b></sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-agentic.gif" width="100%"><br><sub><b>Reads real supplier pages; asks before it orders.</b></sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="assets/gif-build.gif" width="100%"><br><sub><b>The AI builds the AG Studio workspace live.</b></sub></td>
-<td width="50%"><img src="assets/gif-cash.gif" width="100%"><br><sub><b>Live PayPal balance, money already leaving, a 10% cushion: pays only what fits.</b></sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-build.gif" width="100%"><br><sub><b>The AI builds the AG Studio workspace live.</b></sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-cash.gif" width="100%"><br><sub><b>Live PayPal balance, money already leaving, a 10% cushion: pays only what fits.</b></sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="assets/gif-approve.gif" width="100%"><br><sub><b>Hold to approve: PayPal Invoicing + PayPal Payouts.</b></sub></td>
-<td width="50%"><img src="assets/gif-close.gif" width="100%"><br><sub><b>Monday used to take all day. Now it takes one question.</b></sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-approve.gif" width="100%"><br><sub><b>Hold to approve: PayPal Invoicing + PayPal Payouts.</b></sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-close.gif" width="100%"><br><sub><b>Monday used to take all day. Now it takes one question.</b></sub></td>
 </tr>
 </table>
 
@@ -61,12 +61,12 @@ The AI doesn't draw a chart. **It builds a whole AG Studio workspace for every q
 
 <table>
 <tr>
-<td width="50%"><img src="assets/gif-ag-explode.gif" width="100%"><br><sub>AG Grid, AG Charts, a combo chart, a gantt diagram, a live plan and PayPal approval cards, all placed by the AI.</sub></td>
-<td width="50%"><img src="assets/gif-ag-compose.gif" width="100%"><br><sub>BizOS's own widgets appear in AG Studio's Compose menu, including a <b>PayPal action</b> card.</sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-ag-explode.gif" width="100%"><br><sub>AG Grid, AG Charts, a combo chart, a gantt diagram, a live plan and PayPal approval cards, all placed by the AI.</sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-ag-compose.gif" width="100%"><br><sub>BizOS's own widgets appear in AG Studio's Compose menu, including a <b>PayPal action</b> card.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="assets/gif-ag-ideas.gif" width="100%"><br><sub>Click an idea on the Ideas map: the dashboard asks BizOS the next question.</sub></td>
-<td width="50%"><img src="assets/gif-ag-trio.gif" width="100%"><br><sub>Three questions, three different AI-designed workspaces (real runs).</sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-ag-ideas.gif" width="100%"><br><sub>Click an idea on the Ideas map: the dashboard asks BizOS the next question.</sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-ag-trio.gif" width="100%"><br><sub>Three questions, three different AI-designed workspaces (real runs).</sub></td>
 </tr>
 </table>
 
@@ -85,7 +85,7 @@ The AI doesn't draw a chart. **It builds a whole AG Studio workspace for every q
 
 <table>
 <tr>
-<td width="40%" align="center"><img src="assets/money-loop.gif" width="100%"></td>
+<td width="40%" align="center"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/money-loop.gif" width="100%"></td>
 <td width="60%">
 
 **35 approved PayPal actions, in 3 risk levels:**
@@ -107,15 +107,15 @@ Card, vault and identity endpoints are **not on the list**, so no prompt can rea
 
 <table>
 <tr>
-<td width="50%"><img src="assets/gif-refunds.gif" width="100%"><br><sub>Refunds and disputes become approval cards inside the dashboard.</sub></td>
-<td width="50%"><img src="assets/gif-35.gif" width="100%"><br><sub>It reads by itself. You approve. You hold for money.</sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-refunds.gif" width="100%"><br><sub>Refunds and disputes become approval cards inside the dashboard.</sub></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-35.gif" width="100%"><br><sub>It reads by itself. You approve. You hold for money.</sub></td>
 </tr>
 </table>
 
 ## How we built it
 
 <p align="center">
-  <img src="assets/arch.gif" alt="BizOS architecture" width="100%">
+  <img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/arch.gif" alt="BizOS architecture" width="100%">
 </p>
 
 | Technology | Role |
@@ -158,7 +158,7 @@ People don't want an AI that spends for them; they want one that **does the read
 
 ## Try it
 
-- **Source and run guide:** [`README.md`](../README.md) · [`TECHNICAL.md`](../TECHNICAL.md)
+- **Source and run guide:** [`README.md`](https://github.com/azharizz/BizOS/blob/main/README.md) · [`TECHNICAL.md`](https://github.com/azharizz/BizOS/blob/main/TECHNICAL.md)
 - **Run:** `cd backend && uv sync && cd ../desktop && npm install && npm run dev`, then press **⌘⇧Space** and ask *"Which suppliers should I pay this week, and can I afford it?"*
 
 <p align="center"><sub>BizOS · Ask. Check. Approve. · PayPal AI Hackathon 2026</sub></p>
