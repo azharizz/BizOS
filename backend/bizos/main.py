@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import actions, agent, bridge, config, llm, memory
+from . import actions, agent, bridge, config, llm, memory, quotes
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("BIZOS_TOKEN", "")
@@ -43,7 +43,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.middleware("http")
 async def require_token(request: Request, call_next):
-    public = request.url.path == "/pair"  # guarded by its own single-use code instead
+    public = request.url.path == "/pair" or request.url.path.startswith("/demo/")  # /pair has its own single-use code; /demo is a sample website
     if TOKEN and not public and request.method != "OPTIONS" and request.headers.get("x-bizos-token") != TOKEN:
         return JSONResponse({"detail": "bad token"}, status_code=401)
     return await call_next(request)
@@ -65,6 +65,25 @@ def _action(ref: ActionRef) -> dict:
     if not spec:
         raise HTTPException(404, "unknown action")
     return spec
+
+
+@app.get("/demo/sourcing", response_class=HTMLResponse)
+def demo_sourcing():
+    """Sample marketplace page the Chrome extension reads in the procurement demo."""
+    return quotes.render_page()
+
+
+@app.get("/demo/market", response_class=HTMLResponse)
+def demo_market():
+    return quotes.render_market()
+
+
+@app.get("/demo/s/{slug}", response_class=HTMLResponse)
+def demo_supplier(slug: str):
+    page = quotes.render_supplier(slug)
+    if page is None:
+        raise HTTPException(404, "unknown supplier")
+    return page
 
 
 @app.get("/health")
@@ -132,6 +151,19 @@ def preview(ref: ActionRef):
 @app.post("/actions/execute")
 async def execute(body: Approval):
     spec = _action(body)
+    if spec["kind"] == "payout" and paypal and body.approved_by.strip():  # check before PayPal says no
+        try:
+            nb = await actions.net_balance(paypal)
+            need = round(spec["amount"] * (config.PAYPAL_DEMO_SCALE or 1) * 1.02, 2)  # payouts carry a ~2% fee
+            if need > nb["sandbox_available"]:
+                held = f", and ${nb['held']:,.2f} is held in earlier unsettled payouts" if nb["held"] else ""
+                spec["status"], spec["error"] = "failed", (f"Not sent: this payout needs about ${need:,.2f} including PayPal's fee, but only "
+                                                           f"${nb['sandbox_available']:,.2f} is available{held}. Nothing was charged.")
+                raise HTTPException(409, spec["error"])
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # the balance could not be read: let PayPal decide
     try:
         result = await engine.execute(body.workspace_id, spec, body.idempotency_key, body.approved_by)
     except actions.ApprovalRequired as e:
@@ -180,7 +212,7 @@ def extension():
             "outdated": bridge.hub.connected and version != EXTENSION_VERSION}
 
 
-EXTENSION_VERSION = json.loads((config.ROOT / "app" / "chrome_extension" / "manifest.json").read_text())["version"]
+EXTENSION_VERSION = json.loads((config.ROOT / "chrome_extension" / "manifest.json").read_text())["version"]
 PAIR_CODES: dict[str, float] = {}
 PAIR_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Connect BizOS</title>
 <meta name="bizos-pair" content="{token}" data-bridge="ws://127.0.0.1:8787/ext">
@@ -212,7 +244,7 @@ def pair_link():
 def pair_page(code: str = ""):
     if PAIR_CODES.pop(code, 0) < time.time():
         return HTMLResponse("<p style='font-family:system-ui'>This pairing link has expired. Click <b>Connect Chrome</b> in BizOS again.</p>", 403)
-    folder = config.ROOT / "app" / "chrome_extension"
+    folder = config.ROOT / "chrome_extension"
     return PAIR_PAGE.format(token=html.escape(bridge.extension_token()), folder=html.escape(str(folder)))
 
 

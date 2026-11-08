@@ -9,3 +9,4 @@ audit.jsonl
 
 # macOS
 .DS_Store
+desktop/build/home.txt

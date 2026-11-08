@@ -31,6 +31,11 @@ class Fake:
         return httpx.Response(404, json={"message": "not found"})
 
 
+@pytest.fixture(autouse=True)
+def full_scale(monkeypatch):
+    monkeypatch.setattr(actions.config, "PAYPAL_DEMO_SCALE", 1.0)  # the real .env may run the Sandbox demo at a smaller scale
+
+
 @pytest.fixture
 def pp():
     fake = Fake()
@@ -131,3 +136,81 @@ def test_paypal_validation_errors_say_why():
     with pytest.raises(actions.PayPalError) as e:
         asyncio.run(client.read("balances"))
     assert e.value.status == 422 and "/line_items/0/quantity UNKNOWN_FIELD" in str(e.value)
+
+
+# ---- the cash gate sees money held in unsettled payouts, and a refusal is explained
+def money_handler(available="4998.75", item_status="UNCLAIMED"):
+    def handler(request: httpx.Request):
+        p = request.url.path
+        if p == "/v1/oauth2/token":
+            return httpx.Response(200, json={"access_token": "T", "expires_in": 3600})
+        if p == "/v1/reporting/balances":
+            return httpx.Response(200, json={"as_of_time": "2026-11-08T03:59:00Z", "balances": [
+                {"currency": "USD", "available_balance": {"value": available}, "withheld_balance": {"value": "0.00"}}]})
+        if p.startswith("/v1/payments/payouts/"):
+            return httpx.Response(200, json={"items": [{"transaction_status": item_status, "payout_item": {"amount": {"value": "1000.00"}},
+                                                        "payout_item_fee": {"value": "20.00"}}]})
+        if p == "/v1/payments/payouts" and request.method == "POST":
+            return httpx.Response(422, json={"name": "INSUFFICIENT_FUNDS", "message": "Sender does not have sufficient funds. Please add funds and retry.",
+                                             "debug_id": "d1"})
+        return httpx.Response(404, json={"message": "no"})
+    return handler
+
+
+def test_net_balance_subtracts_money_held_in_payouts_we_sent(tmp_path, monkeypatch):
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(json.dumps({"at": actions.datetime.now(actions.timezone.utc).isoformat(), "kind": "payout", "outcome": "executed",
+                                 "result": {"reference": "B1", "status": "PENDING"}}) + "\n")
+    monkeypatch.setattr(actions.config, "AUDIT_PATH", audit)
+    pp = actions.PayPal("i", "s", "https://api-m.sandbox.paypal.com", transport=httpx.MockTransport(money_handler()))
+    nb = asyncio.run(actions.net_balance(pp))
+    assert nb["listed"] == 4998.75 and nb["held"] == 1020.0 and nb["available"] == 3978.75
+
+
+def test_a_settled_payout_holds_nothing(tmp_path, monkeypatch):
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(json.dumps({"at": actions.datetime.now(actions.timezone.utc).isoformat(), "kind": "payout", "outcome": "executed",
+                                 "result": {"reference": "B1"}}) + "\n")
+    monkeypatch.setattr(actions.config, "AUDIT_PATH", audit)
+    pp = actions.PayPal("i", "s", "https://api-m.sandbox.paypal.com", transport=httpx.MockTransport(money_handler(item_status="SUCCESS")))
+    assert asyncio.run(actions.net_balance(pp))["held"] == 0
+
+
+def test_demo_scale_shrinks_what_is_sent_and_grows_the_plan_cash(tmp_path, monkeypatch):
+    monkeypatch.setattr(actions.config, "AUDIT_PATH", tmp_path / "none.jsonl")
+    monkeypatch.setattr(actions.config, "PAYPAL_DEMO_SCALE", 0.1)
+    pp = actions.PayPal("i", "s", "https://api-m.sandbox.paypal.com", transport=httpx.MockTransport(money_handler(available="434.00")))
+    nb = asyncio.run(actions.net_balance(pp))
+    assert nb["available"] == 4340.0 and nb["sandbox_available"] == 434.0 and nb["scale"] == 0.1
+
+
+def test_insufficient_funds_is_explained_not_dumped(tmp_path):
+    pp = actions.PayPal("i", "s", "https://api-m.sandbox.paypal.com", transport=httpx.MockTransport(money_handler()))
+    spec = {"id": "p", "amount": 5000.0, "currency": "USD", "email": "a@b.c", "source": "PO", "kind": "payout"}
+    with pytest.raises(actions.PayPalError) as e:
+        asyncio.run(pp.payout(spec, "k"))
+    assert "does not have enough available money" in str(e.value) and "PAYPAL_SANDBOX_RECEIVER" in str(e.value)
+
+
+def test_demo_scale_changes_the_amount_actually_sent(monkeypatch):
+    monkeypatch.setattr(actions.config, "PAYPAL_DEMO_SCALE", 0.1)
+    seen = {}
+
+    def handler(request: httpx.Request):
+        if request.url.path == "/v1/oauth2/token":
+            return httpx.Response(200, json={"access_token": "T", "expires_in": 3600})
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"batch_header": {"batch_status": "PENDING", "payout_batch_id": "B9"}})
+    pp = actions.PayPal("i", "s", "https://api-m.sandbox.paypal.com", transport=httpx.MockTransport(handler))
+    out = asyncio.run(pp.payout({"id": "p", "amount": 3293.76, "currency": "USD", "email": "a@b.c", "source": "PO"}, "k"))
+    assert seen["body"]["items"][0]["amount"]["value"] == "329.38" and out["reference"] == "B9"
+
+
+def test_payouts_sent_before_the_balance_snapshot_are_not_subtracted_twice(tmp_path, monkeypatch):
+    audit = tmp_path / "audit.jsonl"
+    old = "2026-11-08T03:00:00+00:00"  # before as_of_time 03:59 in money_handler
+    audit.write_text(json.dumps({"at": old, "kind": "payout", "outcome": "executed", "result": {"reference": "OLD"}}) + "\n")
+    monkeypatch.setattr(actions.config, "AUDIT_PATH", audit)
+    pp = actions.PayPal("i", "s", "https://api-m.sandbox.paypal.com", transport=httpx.MockTransport(money_handler()))
+    nb = asyncio.run(actions.net_balance(pp))
+    assert nb["held"] == 0 and nb["available"] == 4998.75

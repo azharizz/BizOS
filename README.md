@@ -4,28 +4,63 @@ A floating overlay that reads what you're looking at (screen + Chrome DOM), lets
 company data, compiles an AG Studio workspace, and lets a person approve real PayPal Sandbox actions.
 
 ```
-app/
-  backend/              Python · FastAPI · OpenAI Agents SDK
-    bizos/
-      agent.py          Session: planner agent -> user approves -> analyst agent (tools, streamed brief)
-      tools.py          agent tools: verified flow steps, guarded SQL, Chrome DOM, PayPal reads, canvas design
-      flows.py          7 department flows (factory + @register), each step verified
-      compiler.py       the AG Studio canvas: widget factory, grid placement + compaction, default layout
-      actions.py        PayPal client, action factory, @audited @requires_approval @idempotent
-      bridge.py         Chrome extension hub (request/response over WebSocket)
-      llm.py            model for the SDK + startup capability check + L3 vision
-      main.py           /ws /ext /workspaces /actions/* /paypal/payouts/* /extension /audit /health
-    tests/              154 tests
-  desktop/              Electron · React · Vite (overlay pill + workspace window)
-  chrome_extension/     MV3: background.js, content_script.js, popup, options (bridge URL + token)
+backend/                Python · FastAPI · OpenAI Agents SDK
+  bizos/
+    agent.py            Session: planner agent -> user approves -> analyst agent (tools, streamed brief)
+    tools.py            agent tools: verified flow steps, guarded SQL, Chrome DOM, PayPal reads, canvas design
+    flows.py            7 department flows (factory + @register), each step verified; Procurement is the cash-aware hub
+    seed.py             deterministic mock company (data/mock/bizos.db); built on first run if missing
+    compiler.py         the AG Studio canvas: widget factory, grid placement + compaction, default layout
+    actions.py          PayPal client, action factory, @audited @requires_approval @idempotent
+    bridge.py           Chrome extension hub (request/response over WebSocket)
+    llm.py              model for the SDK + startup capability check + L3 vision
+    main.py             /ws /ext /workspaces /actions/* /paypal/payouts/* /extension /audit /health
+  tests/                190 tests
+desktop/                Electron · React · Vite (overlay pill + workspace window)
+chrome_extension/       MV3: background.js, content_script.js, popup, options (bridge URL + token)
+data/mock/bizos.db      the mock company the flows read (regenerate: cd backend && uv run python -m bizos.seed)
 ```
+
+## Cash-aware procurement (the flagship flow)
+
+With the Chrome extension connected and a marketplace page in front (sample: `http://127.0.0.1:8787/demo/market`), BizOS
+opens each supplier's own site in Chrome, reads its quote whatever the layout, and asks for a quote where none is published.
+It also reads a single quotes table (sample page at `http://127.0.0.1:8787/demo/sourcing`), ranks them by what they really cost (price plus the sales lost while stock is
+out), selects the winner on the page (the final **Confirm order** click always asks first) and puts its deposit at the
+front of the pay-and-collect plan. Without Chrome the same quotes come from a built-in copy. Every plan row has a
+`source` column, and the workspace draws a **Where the data came from** diagram. Recording guide: `demo/README.md`.
+
+
+Procurement is where every department's decision turns into a payment, so one flow joins them and lets PayPal be the
+cash rail: **collect, hold, pay, confirm**.
+
+| Question | Department data | PayPal |
+|---|---|---|
+| Which products will stock out, and which open POs feed them? | Operations (stock risk) | |
+| Which suppliers are late, and what is their early-pay discount? | Procurement (scorecard, terms) | |
+| What can we spend today? | Finance | **Balances** (live, withheld funds included) |
+| What do customers owe? | Sales (overdue invoices) | **Invoicing** payment requests |
+| Pay a supplier | | **Payouts**, press-and-hold approval |
+
+The plan (an AG Grid, a cash-after-each-stage chart and the supplier scorecard) schedules payments against
+the cash on hand with a 10% reserve: early-pay discounts first, then stock-out risk, then due date. A slow supplier
+(avg delay over 3 days) is paid **on receipt**, not in advance. What cash cannot cover waits for collections: the
+largest overdue invoices are chased first (a PayPal payment request each), assuming 70% arrives. A discount that ends
+before collections land is shown as lost. Try: *"Which suppliers should I pay this week, and can I afford it?"* The scheduling
+rule is a pure function (`flows.plan_run`), covered by tests; the cash comes from the live Sandbox balance, or a
+5,000 USD demo balance when PayPal is not connected (the plan says which).
 
 ## Run
 
 ```bash
-cd app/backend && uv sync
+cd backend && uv sync
 cd ../desktop && npm install && npm run dev     # spawns the backend itself
 ```
+
+**Install as a Mac app (local build):** `cd desktop && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir`, then
+`codesign --force --deep --sign - dist/mac-arm64/BizOS.app` and copy it to `~/Applications`. It runs from this project folder (it reads the path from
+`desktop/build/home.txt`, written at build time, and uses `backend/.venv`), so it is a personal build, not a redistributable one. macOS then lists it
+as **BizOS** in Privacy & Security (Microphone for Hands-free).
 
 Press **⌘⇧Space** (Ctrl+Shift+Space) over any app and ask anything. Drag the dotted grip on the pill to move the overlay. There are no role tabs: the planner works out
 whether it's an executive, finance, marketing, engineering, operations, procurement or sales question (seven verified
@@ -71,16 +106,35 @@ click or by voice):
 after a restart (History menu in the workspace window); the agent remembers facts you tell it ("remember that…")
 and can reopen a past workspace ("continue my LLM pricing workspace").
 
-**Chrome extension:** `chrome://extensions` → Developer mode → Load unpacked → `app/chrome_extension`.
+**Chrome extension:** `chrome://extensions` → Developer mode → Load unpacked → `chrome_extension`.
 In the overlay footer click **Pair Chrome** (copies the token), paste it in the extension's Settings.
 Chrome asks once to allow **local network access**: click Allow (the bridge is 127.0.0.1).
+
+## Exploring, deciding, paying, scheduling
+
+- **`explore_site`**: crawls one real site in your Chrome within limits (up to 25 pages, about 150 s): uses the site's own search, follows the
+  links most relevant to the goal and pagination, reads prices, tables, MOQ, lead time, terms and certificates. Navigation only; it never
+  clicks buttons that submit, buy or send. Sites that need a sign-in (alibaba.com, aliexpress.com, faire.com...) are skipped.
+- **`page_do`**: operates the page you are on by control label, several steps at once (type, choose, click, scroll). Risky controls ask first.
+- **`evaluate_options`**: requirements (weights, must-haves) against what pages actually state, as a weighted matrix with pros and cons and an
+  "evidence known" share. A must-have nobody published is "unconfirmed", not a failure.
+- **Calendar**: the pay-and-collect plan proposes one action that puts its deadlines on your Mac Calendar with alarms. It writes an `.ics`
+  and hands it to Calendar, so no macOS permission prompt is needed; Calendar asks which calendar to use.
+- **PayPal cash gate**: the balance is PayPal's snapshot minus payouts you sent after it (unsettled payouts hold their money); a payout is
+  re-checked before it is sent and a refusal is explained. `PAYPAL_SANDBOX_RECEIVER` should be a Sandbox personal account so test payouts
+  settle. If the Sandbox balance is small, `PAYPAL_DEMO_SCALE=0.1` sends 10% of each payout and the plan cash scales up to match (the
+  action card says so).
 
 ## Test
 
 ```bash
-cd app/backend && uv run pytest                                    # 154 passed
-cd app/desktop && npm test && npm run lint && npm run typecheck    # 61 passed (incl. extension DOM reader)
+cd backend && uv run pytest                                    # 190 passed, 10 skipped (wake word needs macOS + model)
+cd desktop && npm test && npm run lint && npm run typecheck    # 62 passed (incl. extension DOM reader)
 ```
+
+Copy your keys into a repo-root `.env` (`AGENT_API_KEY`, `AGENT_BASE_URL`, `AGENT_MODEL`, `PAYPAL_CLIENT_ID`,
+`PAYPAL_CLIENT_SECRET`, `AG_STUDIO_LICENSE_KEY`; `PAYPAL_BASE_URL` defaults to the Sandbox). Node 22.12+ is needed for
+`npm install` on recent npm versions.
 
 ## PayPal Sandbox app: enable these features
 

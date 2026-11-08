@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -44,3 +45,4 @@ def test_stop_right_after_the_wake_phrase(tmp_path, phrase, expected):
     rec, chunks = wake.recognizer(), speech(tmp_path, phrase)
     assert wake.detect(rec, chunks)
     assert wake.follow(rec, chunks) == expected
+

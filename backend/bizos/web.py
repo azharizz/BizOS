@@ -62,7 +62,7 @@ class _Text(HTMLParser):
 def page_text(html: str) -> dict:
     p = _Text()
     p.feed(html)
-    return {"title": p.title, "text": " ".join(p.parts)[:8000]}
+    return {"title": p.title, "text": " ".join(p.parts)[:30000]}
 
 
 class _Results(HTMLParser):

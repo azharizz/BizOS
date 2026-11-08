@@ -258,7 +258,7 @@ async function onWake() {
     voiceTurn = true
     actions.ask(text, true)
   } else if (state.open && !state.dictating) {
-    dispatch({ type: 'error', message: 'Didn’t hear anything. Say “Hey BizOS”, wait for the chime, then speak.' })
+    dispatch({ type: 'error', message: 'Didn’t hear anything. Say “Hey BizOS”, wait for the chime, then speak. If dictation keeps typing nothing (even in TextEdit), restart your Mac: macOS Dictation sometimes stops working until then.' })
   }
 }
 

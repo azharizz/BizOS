@@ -6,6 +6,7 @@ cards. Widget kinds are built by a factory (`WIDGETS`); a kind maps the agent's 
 the AG Studio data mapping. Without a model, `compose_default` lays out a flow's suggested widgets.
 AG Studio field ids are `source.field`.
 """
+import html
 import copy
 import json
 import re
@@ -158,7 +159,7 @@ def _diagram_style(spec: dict) -> dict:
     text = _need(spec, "source_text", "Mermaid diagram text").strip()
     if text.split(None, 1)[0] not in DIAGRAMS:
         raise ValueError(f"start with a Mermaid diagram type: one of {list(DIAGRAMS)}")
-    return {"source": text[:6000]}
+    return {"source": text[:20000]}
 
 
 def _ideas_style(spec: dict) -> dict:
@@ -184,7 +185,7 @@ WIDGETS = {
     "grid": _grid, "pivot": _pivot, "gauge": _single("radial-gauge", True), "linear-gauge": _single("linear-gauge", True),
     "list-filter": _single("list-filter", False), "date-filter": _single("date-filter", False), "button-filter": _single("button-filter", False),
     "note": _note, "image": _image,
-    "text": _custom("bizos-text", lambda s: {"text": _need(s, "text", "the text (Markdown)")[:4000]}),
+    "text": _custom("bizos-text", lambda s: {"text": _need(s, "text", "the text (Markdown)")[:20000]}),
     # BizOS's own widgets (desktop/src/renderer/src/workspace/widgets.tsx)
     "plan": _custom("bizos-plan", lambda s: {}), "summary": _custom("bizos-summary", lambda s: {}),
     "diagram": _custom("bizos-diagram", _diagram_style), "ideas": _custom("bizos-ideas", _ideas_style),
@@ -267,7 +268,7 @@ class Canvas:
         self.ws["seq"] += 1
         pid = f"p{self.ws['seq']}"
         self.ws["state"]["pages"].append(new_page(pid))
-        self.ws["pages"].append({"id": pid, "title": title.strip()[:40] or f"Page {len(self.ws['pages']) + 1}"})
+        self.ws["pages"].append({"id": pid, "title": html.unescape(title).strip()[:40] or f"Page {len(self.ws['pages']) + 1}"})
         self.ws["state"]["selectedPageId"] = pid
         self.use_page(pid)
         self._bump()
@@ -359,7 +360,7 @@ class Canvas:
         widget = self._find(wid)["widgets"][wid]
         _merge(widget.setdefault("format", {}), _checked_format(fmt))
         if title:
-            widget["format"]["title"] = {"text": title[:120], "enabled": True}
+            widget["format"]["title"] = {"text": html.unescape(title)[:120], "enabled": True}
         self._bump()
 
     def move(self, wid: str, x: int, y: int, width: int, height: int):
@@ -435,6 +436,37 @@ def compose_default(canvas: Canvas, findings, kpis: bool = True) -> None:
             canvas.add(spec)
         except (KeyError, ValueError):
             continue
+
+
+LINEAGE_TITLE = "Where the data came from"
+
+
+RESEARCH_TITLE = "Supplier sites BizOS read in Chrome"
+
+
+def _has_widget(canvas: Canvas, title: str) -> bool:
+    return any((w.get("format", {}).get("title") or {}).get("text") == title
+               for p in canvas.ws["state"]["pages"] for w in p.get("widgets", {}).values())
+
+
+def ensure_lineage(canvas: Canvas, findings) -> None:
+    """A flow that can say where its numbers came from gets that as a diagram in the workspace (once), and a flow that read
+    several sites gets the table of what it found there."""
+    if "research_log" in findings.tables and not _has_widget(canvas, RESEARCH_TITLE):
+        try:
+            canvas.add({"kind": "grid", "source": "research_log", "title": RESEARCH_TITLE,
+                        "cols": ["site", "country", "unit_price", "moq", "lead_days", "terms", "status"]})
+        except (KeyError, ValueError):
+            pass
+    if not getattr(findings, "diagram", ""):
+        return
+    for p in canvas.ws["state"]["pages"]:
+        if any((w.get("format", {}).get("title") or {}).get("text") == LINEAGE_TITLE for w in p.get("widgets", {}).values()):
+            return
+    try:
+        canvas.add({"kind": "diagram", "title": LINEAGE_TITLE, "source_text": findings.diagram})
+    except (KeyError, ValueError):
+        pass
 
 
 def register(canvas: Canvas, findings, pinned: dict) -> None:

@@ -5,9 +5,11 @@ with `@register` and are created with `make_flow(name)` (factory). The agent run
 time so it can verify each before moving on; `Flow.run` does the same in one go.
 """
 import math
+import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 
-from . import config
+from . import config, quotes as quote_lib
 from .data import q, q1
 
 FLOWS: dict[str, type["Flow"]] = {}
@@ -56,6 +58,7 @@ class Findings:
     widgets: list[dict]
     actions: list[dict]
     risks: list[str] = field(default_factory=list)
+    diagram: str = ""  # Mermaid flowchart: where the data came from
 
 
 class Flow:
@@ -407,12 +410,105 @@ class Operations(Flow):
 
 
 # ---------------------------------------------------------------- Procurement
+SLOW_DELAY_DAYS = 3.0  # a supplier later than this on average is paid on receipt, not in advance
+RESERVE_PCT = .10      # cash left untouched when scheduling payments
+COLLECT_PCT = .70      # share of an overdue invoice we assume a reminder brings in
+COLLECT_DELAY_DAYS = 3  # how long a collection takes to land; discounts ending sooner are lost
+MAX_ASKS = 4           # first wave of invoices to chase, largest first
+
+
+def ends(days: int) -> str:
+    return "ends today" if days == 0 else f"ends in {days}d"
+
+
+def plan_run(pos: list[dict], cash: float, receivables: list[dict], today: date,
+             reserve_pct: float = RESERVE_PCT, collect_pct: float = COLLECT_PCT) -> dict:
+    """Schedule supplier payments against the cash actually on hand.
+
+    Priority: early-pay discount still open, then stock-out risk, then due date. Slow suppliers are held until delivery.
+    A payment that cash cannot cover waits for collections: overdue invoices are chased largest first until the
+    expected inflow (collect_pct of each) covers what is waiting. Pure function: easy to test and to re-run what-if.
+    """
+    pos = [dict(p) for p in pos]  # never mutate the caller's rows: what-if re-runs reuse them
+    spendable = max(cash * (1 - reserve_pct), 0.0)
+    rows = []
+    for po in pos:
+        invoiced = date.fromisoformat(po["invoice_date"])
+        pct = po["early_pay_discount_pct"] or 0
+        window = po["early_pay_days"] or 0
+        left = (invoiced + timedelta(days=window) - today).days
+        po["discount_days_left"] = left if pct and left >= 0 else None
+        po["discount_usd"] = round(po["amount"] * pct / 100, 2) if po["discount_days_left"] is not None else 0.0
+        po["net"] = round(po["amount"] - po["discount_usd"], 2)
+        po["at_risk"] = bool(po["on_hand"] is not None and po["on_hand"] < po["forecast_demand"])
+        po["slow"] = (po["avg_delay_days"] or 0) > SLOW_DELAY_DAYS
+        po["tier"] = (0 if po["discount_usd"] and po["at_risk"] else 1 if po["discount_usd"] else 2 if po["at_risk"] else 3)
+    queue = sorted(pos, key=lambda p: (not p.get("urgent"), p["slow"], p["tier"], -p["discount_usd"], p["payment_due_on"]))
+    left_cash, waiting, lost = spendable, [], 0.0
+    for po in queue:
+        if po["slow"]:
+            po["when"], po["why"] = "On receipt", (f"{po['supplier']} averages {po['avg_delay_days']:.1f} days late"
+                                                    f"{' and this product is below forecast demand' if po['at_risk'] else ''}: "
+                                                    f"pay on delivery, and line up a backup supplier")
+        elif po["net"] <= left_cash:
+            left_cash -= po["net"]
+            po["when"] = "Today"
+            po["why"] = po.get("note") or (f"{po['supplier_terms']} early-pay discount saves ${po['discount_usd']:,.0f}, {ends(po['discount_days_left'])}"
+                         if po["discount_usd"] else "Stock is below forecast demand" if po["at_risk"] else f"Due {po['payment_due_on']}")
+            if po["discount_usd"] and po["at_risk"]:
+                po["why"] += "; stock is below forecast demand"
+        else:
+            po["when"], po["why"] = "After collection", "Cash cannot cover it today"
+            if po["discount_usd"] and po["discount_days_left"] < COLLECT_DELAY_DAYS:  # gone before the cash arrives
+                po["why"] += f"; the ${po['discount_usd']:,.0f} discount {ends(po['discount_days_left'])}, before collections land"
+                lost += po["discount_usd"]
+                po["discount_usd"], po["net"] = 0.0, po["amount"]
+            waiting.append(po)
+        rows.append(po)
+    # chase overdue invoices (largest first) until the expected inflow covers what is waiting
+    need = sum(p["net"] for p in waiting if p["tier"] < 3)
+    asks, expected = [], 0.0
+    for inv in sorted(receivables, key=lambda r: -r["amount"]):
+        if expected >= need or len(asks) >= MAX_ASKS:
+            break
+        asks.append({**inv, "expected": round(inv["amount"] * collect_pct, 2)})
+        expected += asks[-1]["expected"]
+    expected = round(expected, 2)
+    cover = spendable - sum(p["net"] for p in rows if p["when"] == "Today") + expected
+    for po in waiting:
+        if po["net"] <= cover:
+            cover -= po["net"]
+        else:
+            po["when"], po["why"] = "Next cycle", "Still short after expected collections"
+    today_total = round(sum(p["net"] for p in rows if p["when"] == "Today"), 2)
+    after_collect = round(sum(p["net"] for p in rows if p["when"] == "After collection"), 2)
+    stages = [("Start", round(cash, 2)), ("After today's payments", round(cash - today_total, 2)),
+              ("After collections land", round(cash - today_total + expected, 2)),
+              ("After remaining payments", round(cash - today_total + expected - after_collect, 2))]
+    return {"rows": queue, "asks": asks, "expected": expected, "today_total": today_total, "after_collect": after_collect,
+            "stages": [{"stage": n, "cash_after": v} for n, v in stages],
+            "discount_captured": round(sum(p["discount_usd"] for p in rows if p["when"] in ("Today", "After collection")), 2),
+            "discount_lost": round(lost, 2)}
+
+
+ASSUMED_NEW_DELAY = 3.0  # days late assumed for a quoted supplier with no delivery history
+
+
 @register
 class Procurement(Flow):
-    name, team, goal = "procurement", "Procurement", "Which supplier is costing us?"
-    keywords = ("supplier", "vendor", "procure", "purchase order", "lead time", "sourcing", "alibaba")
+    """Procurement as the hub: a page of quotes (Chrome), Operations (what runs out), Sales (what customers owe)
+    and Finance (what PayPal holds) decide who to order from, who to pay now and what to collect first."""
+    name, team, goal = "procurement", "Procurement", "Who should we buy from, who do we pay now, and can we afford it?"
+    keywords = ("supplier", "vendor", "procure", "purchase order", "lead time", "sourcing", "alibaba", "pay run", "payables",
+                "early pay", "quote")
     steps = (("Score suppliers on delay and reliability", "score"), ("Trace margin loss to supplier cost", "margin"),
-             ("Pick the next payment and a switch candidate", "pick"))
+             ("Compare supplier quotes against stock risk", "quotes"),
+             ("Match open purchase orders to stock risk", "open_pos"), ("Check PayPal cash and overdue receivables", "cash"),
+             ("Build the pay-and-collect plan", "plan"))
+    note = ("When the page on screen lists several suppliers with 'View quote' links, this flow itself opens and reads every "
+            "supplier site in Chrome and picks the quote on the page: never plan page-reading or clicking steps for that.")
+    DEMO_CASH = 5000.0  # used only when PayPal is not connected
+    wants_balance = ("cash",)  # tools.run_step fetches the live PayPal balance before this step
 
     def score(self, ctx):
         return {"scorecard": q("""SELECT s.supplier_id, s.name AS supplier, s.country, COUNT(*) pos,
@@ -426,36 +522,240 @@ class Procurement(Flow):
                     ROUND(p.list_price-pc.purchase_cost-pc.manufacturing_cost-pc.storage_cost,2) profit_per_unit
                     FROM product_costs pc JOIN products p USING(product_id) WHERE p.product_id=1 ORDER BY pc.month""")}
 
-    def pick(self, ctx):
-        good = [s["supplier_id"] for s in ctx["scorecard"] if s["avg_delay_days"] <= 1]
-        po = q("""SELECT po.po_id, po.supplier_id, s.name, ROUND(po.quantity*po.unit_cost,2) amount FROM purchase_orders po
-                  JOIN suppliers s USING(supplier_id) WHERE po.status='in_transit' AND po.supplier_id IN (%s)
-                  ORDER BY amount LIMIT 1""" % ",".join(map(str, good)))
-        return {"next_payment": po[0]}
+    def quotes(self, ctx):
+        """Rank the quotes on the Chrome page by what they really cost: price plus the sales lost while stock is out."""
+        c = ctx["context"]
+        web = ctx.get("web_quotes") or []  # quotes read from several supplier sites in Chrome (tools._research_suppliers)
+        page = [] if web else quote_lib.parse_quotes(c.get("dom", ""))
+        source = (f"Chrome research: {len(web)} supplier sites read" if web else
+                  f"Chrome page: {c.get('title') or c.get('url')}" if page else "Built-in sample quotes (no Chrome page connected)")
+        stock = q("""SELECT i.on_hand, i.forecast_demand, i.reorder_point, p.list_price, p.supplier_id AS current_id
+                     FROM inventory_snapshots i JOIN products p USING(product_id)
+                     WHERE i.product_id=1 AND i.month=(SELECT MAX(month) FROM inventory_snapshots)""")[0]
+        units = stock["forecast_demand"] + stock["reorder_point"] - stock["on_hand"]
+        daily = stock["forecast_demand"] / 30
+        cover = stock["on_hand"] / daily
+        hist = {s["supplier"].lower(): s for s in ctx["scorecard"]}
+        ids = {r["name"].lower(): r["supplier_id"] for r in q("SELECT supplier_id, name FROM suppliers")}
+        out = []
+        raw = web or page or [dict(x) for x in quote_lib.QUOTES]
+        unpriced = [r for r in raw if not r.get("unit_price")]  # no published price: ask for a quote, don't guess
+        raw = [r for r in raw if r.get("unit_price")]
+        if web:  # the supplier we use today is the baseline, from company records
+            inc = q("""SELECT s.name, s.country, s.lead_time_days, s.reliability_score, s.payment_terms_days,
+                       (SELECT unit_cost FROM purchase_orders WHERE product_id=1 ORDER BY ordered_on DESC LIMIT 1) AS cost
+                       FROM suppliers s WHERE s.supplier_id=?""", stock["current_id"])[0]
+            if inc["name"].lower() not in {r["supplier"].lower() for r in raw}:
+                raw.append({"supplier": inc["name"], "country": inc["country"], "unit_price": inc["cost"], "moq": 1,
+                            "lead_days": inc["lead_time_days"], "rating": round(inc["reliability_score"] * 5, 1),
+                            "terms": f"net {inc['payment_terms_days']}", "deposit_pct": 0.0, "url": ""})
+        for r in raw:
+            h = hist.get(r["supplier"].lower())
+            delay = h["avg_delay_days"] if h else None
+            n = max(units, r["moq"])
+            landed = round(r["unit_price"] * n, 2)
+            expected = r["lead_days"] + (delay if delay is not None else ASSUMED_NEW_DELAY)
+            gap = max(0.0, expected - cover)
+            lost = round(gap * daily * max(stock["list_price"] - r["unit_price"], 0), 2)
+            sid = ids.get(r["supplier"].lower())
+            out.append({**r, "supplier_id": sid, "current": "yes" if sid == stock["current_id"] else "",
+                        "history": f"{delay:.1f}d late on average, {h['on_time_pct']:.0f}% on time" if h else f"no history, assume {ASSUMED_NEW_DELAY:g}d late",
+                        "avg_delay_days": delay, "units": n, "expected_lead_days": round(expected, 1), "stockout_days": round(gap, 1),
+                        "landed_cost": landed, "lost_margin": lost, "total_cost": round(landed + lost, 2),
+                        "deposit": round(landed * r["deposit_pct"] / 100, 2)})
+        out.sort(key=lambda r: r["total_cost"])
+        for n, r in enumerate(out, 1):
+            r["rank"] = n
+        cur = next((r for r in out if r["current"]), None)
+        res = {"quotes": out, "chosen": out[0], "quotes_source": source, "current_quote": cur or out[-1],
+               "stock": {**stock, "units": units, "daily": round(daily, 2), "cover_days": round(cover, 1)}}
+        if unpriced:
+            res["unpriced"] = unpriced
+        if web:
+            res["research_log"] = [{"site": r["supplier"], "country": r["country"], "unit_price": r["unit_price"], "moq": r["moq"],
+                                    "lead_days": r["lead_days"], "terms": r["terms"],
+                                    "status": "quote read" if r.get("unit_price") else "no published price: request a quote",
+                                    "url": r.get("url", "")} for r in web]
+        return res
+
+    def open_pos(self, ctx):
+        delay = {s["supplier_id"]: s["avg_delay_days"] for s in ctx["scorecard"]}
+        rows = q("""SELECT po.po_id, po.supplier_id, s.name AS supplier, p.name AS product, po.product_id,
+                    ROUND(po.quantity*po.unit_cost,2) amount, po.payment_due_on, sh.shipped_on AS invoice_date,
+                    s.payment_terms_days, s.early_pay_days, s.early_pay_discount_pct, s.reliability_score,
+                    i.on_hand, i.forecast_demand
+                    FROM purchase_orders po JOIN suppliers s USING(supplier_id) JOIN products p USING(product_id)
+                    JOIN shipments sh USING(po_id)
+                    LEFT JOIN inventory_snapshots i ON i.product_id=po.product_id AND i.month=(SELECT MAX(month) FROM inventory_snapshots)
+                    WHERE po.paid_on IS NULL ORDER BY po.payment_due_on""")
+        for r in rows:
+            r["avg_delay_days"] = delay.get(r["supplier_id"], 0.0)
+            pct_ = r["early_pay_discount_pct"]
+            r["supplier_terms"] = f"{pct_:g}/{r['early_pay_days']} net {r['payment_terms_days']}" if pct_ else f"net {r['payment_terms_days']}"
+        return {"open_pos": rows}
+
+    def cash(self, ctx):
+        bal = ctx.get("balance") or {"available": self.DEMO_CASH, "withheld": 0.0, "source": "demo balance (PayPal not connected)"}
+        recv = q("""SELECT i.invoice_id, c.customer_id, c.name AS customer, c.segment, i.due_on, i.amount,
+                    CAST(julianday((SELECT MAX(order_date) FROM orders)) - julianday(i.due_on) AS INTEGER) AS days_overdue
+                    FROM invoices i JOIN customers c USING(customer_id) WHERE i.status='overdue' ORDER BY i.amount DESC""")
+        return {"balance": bal, "receivables": recv}
+
+    def plan(self, ctx):
+        today = date.fromisoformat(q1("SELECT MAX(order_date) FROM orders")) + timedelta(days=1)
+        ch, cur, st = ctx["chosen"], ctx["current_quote"], ctx["stock"]
+        pos = list(ctx["open_pos"])
+        if ch["deposit"] > 0:  # the quote we picked becomes an order that is paid first
+            pos.insert(0, {"po_id": "NEW", "supplier_id": ch["supplier_id"] or 0, "supplier": ch["supplier"],
+                           "product": "Product A (new order)", "product_id": 1, "amount": ch["deposit"],
+                           "payment_due_on": today.isoformat(), "invoice_date": today.isoformat(), "early_pay_days": 0,
+                           "early_pay_discount_pct": 0, "supplier_terms": f"{ch['deposit_pct']:g}% deposit",
+                           "on_hand": st["on_hand"], "forecast_demand": st["forecast_demand"], "avg_delay_days": ch["avg_delay_days"] or 0.0,
+                           "urgent": True, "note": f"Starts the Product A order: {ch['units']} units arrive in about {ch['expected_lead_days']:g}d "
+                                                   f"(current supplier: {cur['expected_lead_days']:g}d); stock lasts {st['cover_days']:g}d"})
+        run = plan_run(pos, ctx["balance"]["available"], ctx["receivables"], today)
+        grid = []
+        for n, po in enumerate(run["rows"], 1):
+            new = po["po_id"] == "NEW"
+            grid.append({"step": n, "when": po["when"], "action": "Hold" if po["slow"] else "Pay supplier",
+                         "counterparty": po["supplier"], "reference": "New order: Product A (deposit)" if new else f"PO #{po['po_id']} - {po['product']}",
+                         "amount": po["amount"], "discount_usd": po["discount_usd"], "cash_effect": -po["net"], "why": po["why"],
+                         "source": "Chrome quote + SQLite stock" if new and ctx["quotes_source"].startswith("Chrome") else
+                                   "Quote + SQLite stock" if new else "SQLite purchase orders"})
+        for inv in run["asks"]:
+            grid.append({"step": len(grid) + 1, "when": "Today", "action": "Collect", "counterparty": inv["customer"],
+                         "reference": f"Invoice #{inv['invoice_id']} - {inv['days_overdue']}d overdue", "amount": inv["amount"],
+                         "discount_usd": 0.0, "cash_effect": inv["expected"], "why": f"Largest overdue; assume {COLLECT_PCT:.0%} comes in",
+                         "source": "SQLite invoices"})
+        order = {"Today": 0, "After collection": 1, "On receipt": 2, "Next cycle": 3}
+        grid.sort(key=lambda r: (order[r["when"]], r["action"] == "Collect", -r["amount"]))
+        for n, r in enumerate(grid, 1):
+            r["step"] = n
+        return {"run": run, "payment_plan": grid, "cash_stages": run["stages"]}
+
+    def lineage(self, ctx) -> str:
+        """Mermaid flowchart of where every number came from (shown in the workspace)."""
+        n_q, n_po, n_inv = len(ctx["quotes"]), len(ctx["open_pos"]), len(ctx["receivables"])
+        chrome = ctx["quotes_source"].startswith("Chrome")
+        web = ctx["quotes_source"].startswith("Chrome research")
+        bal = ctx["balance"]
+        pp = ("Demo balance (PayPal not connected)" if bal["source"].startswith("demo balance")
+              else f"PayPal Sandbox API: ${bal['available']:,.0f} available")
+        return "\n".join([
+            "flowchart LR",
+            f'  C["{"Chrome: " + str(len(ctx["research_log"])) + " supplier sites read" if web else "Chrome page" if chrome else "Built-in quotes"}: {n_q} priced quotes"]',
+            f'  D[("Company data SQLite: {n_po} open POs, {n_inv} overdue invoices, stock, delivery history")]',
+            f'  P["{pp}"]',
+            '  Q["Quote comparison: price plus lost sales"]',
+            '  G["Pay-and-collect plan: AG Grid"]',
+            '  A["Pay supplier: PayPal Payouts"]',
+            '  B["Request payment: PayPal Invoicing"]',
+            '  H{"Person approves: press and hold"}',
+            "  C --> Q", "  D --> Q", "  Q --> G", "  D --> G", "  P --> G",
+            "  G --> H", "  H --> A", "  H --> B"])
+
+    def deadlines(self, ctx, now, later, run) -> list[dict]:
+        """Dates worth an alarm: a discount that ends, a payment waiting on cash, an overdue invoice to chase."""
+        today = date.fromisoformat(q1("SELECT MAX(order_date) FROM orders")) + timedelta(days=1)
+        at = lambda day, hh, mm=0: datetime(day.year, day.month, day.day, hh, mm).isoformat(timespec="minutes")
+        out = []
+        for p in now:  # paid today: the alarm is the last moment the early-pay discount is still on
+            if p["po_id"] != "NEW" and p["discount_usd"] and p["discount_days_left"] is not None:
+                out.append({"title": f"Early-pay discount ends: PO #{p['po_id']} {p['supplier']} (saves ${p['discount_usd']:,.0f})",
+                            "start": at(today + timedelta(days=p["discount_days_left"]), 17), "minutes": 15, "alarm_minutes": 120,
+                            "notes": f"Pay ${p['net']:,.2f} to {p['supplier']} ({p['supplier_terms']})."})
+        for a in run["asks"][:2]:
+            out.append({"title": f"Chase overdue invoice #{a['invoice_id']}: {a['customer']} (${a['amount']:,.0f})",
+                        "start": at(today + timedelta(days=COLLECT_DELAY_DAYS - 1), 9), "minutes": 20, "alarm_minutes": 30,
+                        "notes": f"{a['days_overdue']} days overdue. A PayPal payment request was sent."})
+        for p in later[:2]:
+            out.append({"title": f"Pay after collections land: PO #{p['po_id']} {p['supplier']} (${p['net']:,.0f})",
+                        "start": at(today + timedelta(days=COLLECT_DELAY_DAYS + 1), 10), "minutes": 20, "alarm_minutes": 60,
+                        "notes": f"Cash should be in by then; due {p['payment_due_on']}."})
+        slow = [p for p in run["rows"] if p["slow"]]
+        if slow:
+            p = slow[0]
+            out.append({"title": f"Check delivery before paying {p['supplier']} (PO #{p['po_id']})",
+                        "start": at(today + timedelta(days=int(p["avg_delay_days"]) + 7), 9), "minutes": 15, "alarm_minutes": 60,
+                        "notes": f"Paid on receipt: this supplier averages {p['avg_delay_days']:.1f} days late."})
+        return sorted(out, key=lambda e: e["start"])[:5]
 
     def findings(self, ctx):
-        sc, m, po = ctx["scorecard"], ctx["product_a_margin"], ctx["next_payment"]
+        sc, m, run, bal = ctx["scorecard"], ctx["product_a_margin"], ctx["run"], ctx["balance"]
+        rows, grid, ch, cur = run["rows"], ctx["payment_plan"], ctx["chosen"], ctx["current_quote"]
         slow, rest = sc[0], sc[1:]
         rest_delay = sum(r["avg_delay_days"] * r["pos"] for r in rest) / sum(r["pos"] for r in rest)
-        alt = min(rest, key=lambda r: (r["avg_delay_days"], -r["reliability_score"]))
-        return Findings(
-            self.name, "Supplier scorecard",
-            f"{slow['supplier']} delivers {slow['avg_delay_days']:.1f} days late on average vs {rest_delay:.1f} for the rest. "
-            f"Product A profit per unit fell from ${m[0]['profit_per_unit']:.0f} to ${m[-1]['profit_per_unit']:.0f}.",
-            [kpi("Slowest supplier delay", slow["avg_delay_days"], "d", "bad"), kpi("Other suppliers delay", rest_delay, "d"),
-             kpi("Product A profit / unit", m[-1]["profit_per_unit"], "$", "bad"),
-             kpi("Profit change", pct(m[-1]["profit_per_unit"], m[0]["profit_per_unit"]), "%", "bad")],
-            {"scorecard": sc, "product_a_margin": m, "delays": sc[:12]},
-            [{"type": "bar", "source": "delays", "title": "Average delivery delay (days)", "x": "supplier", "y": ["avg_delay_days"]},
+        now = [p for p in rows if p["when"] == "Today"]
+        later = [p for p in rows if p["when"] == "After collection"]
+        slow_pos = [p for p in rows if p["slow"]]
+        overdue = sum(r["amount"] for r in ctx["receivables"])
+        saving = max(cur["total_cost"] - ch["total_cost"], 0.0)
+        headline = ((f"Best quote for Product A: {ch['supplier']}, ${saving:,.0f} cheaper all-in than {cur['supplier']} once lost sales are counted. "
+                     if ch is not cur else f"{cur['supplier']} is already the best quote for Product A. ")
+                    + f"{len(now)} payments (${run['today_total']:,.0f}) fit the ${bal['available']:,.0f} in PayPal and capture "
+                    f"${run['discount_captured']:,.0f} in early-pay discounts. "
+                    + (f"{len(later)} more (${run['after_collect']:,.0f}) wait for ${run['expected']:,.0f} of expected collections. " if later else "")
+                    + (f"Chase {len(run['asks'])} overdue invoices first. " if run["asks"] and later else "")
+                    + f"{slow['supplier']} is {slow['avg_delay_days']:.1f} days late on average: its {len(slow_pos)} open PO"
+                    f"{'s are' if len(slow_pos) != 1 else ' is'} held until delivery.")
+        actions = []
+        for p in now[:2]:
+            new = p["po_id"] == "NEW"
+            actions.append({"id": f"payout-new-{p['supplier_id']}" if new else f"payout-po{p['po_id']}", "kind": "payout",
+                            "label": f"Pay {ch['deposit_pct']:g}% deposit to {p['supplier']} (new Product A order)" if new else f"Pay PO #{p['po_id']} ({p['supplier']})",
+                            "amount": p["net"], "currency": "USD", "recipient": p["supplier"], "email": email("supplier", p["supplier_id"]),
+                            "source": f"New order: {ch['units']} units at ${ch['unit_price']:.2f}" if new else f"Purchase order #{p['po_id']} - {p['product']}",
+                            "why": p["why"] + (f" Sandbox demo scale {config.PAYPAL_DEMO_SCALE:g}: PayPal sends ${p['net'] * config.PAYPAL_DEMO_SCALE:,.2f}."
+                                               if config.PAYPAL_DEMO_SCALE != 1 else "")})
+        if run["asks"]:
+            a = run["asks"][0]
+            actions.append({"id": f"collect-{a['invoice_id']}", "kind": "invoice_reminder", "label": f"Request payment from {a['customer']}",
+                            "amount": a["amount"], "currency": "USD", "recipient": a["customer"], "email": email("ap.customer", a["customer_id"]),
+                            "source": f"Invoice #{a['invoice_id']} ({a['days_overdue']}d overdue)",
+                            "why": "Largest overdue invoice; its cash funds the payments waiting on collection."})
+        actions.append({"id": "switch-draft", "kind": "draft", "label": f"Draft: move Product A volume from {slow['supplier']} to {ch['supplier']}",
+                        "amount": 0, "currency": "USD", "recipient": "Procurement lead", "source": "quote comparison",
+                        "why": "Stock is below forecast demand and the current supplier is the slowest."})
+        f = Findings(
+            self.name, "Cash-aware procurement", headline,
+            [kpi("PayPal cash available", bal["available"], "$"), kpi("Open supplier POs", sum(p["amount"] for p in rows if p["po_id"] != "NEW"), "$"),
+             kpi("Payable today", run["today_total"], "$", "good"), kpi("Early-pay discounts captured", run["discount_captured"], "$", "good"),
+             kpi("Saved by switching supplier", saving, "$", "good"), kpi("Overdue from customers", overdue, "$", "bad"),
+             kpi("Slowest supplier delay", slow["avg_delay_days"], "d", "bad"), kpi("Other suppliers delay", rest_delay, "d")],
+            {"payment_plan": grid, "cash_stages": run["stages"], "quotes": ctx["quotes"], "open_pos": rows, "scorecard": sc,
+             "product_a_margin": m, "delays": sc[:12]},
+            [{"type": "stacked-column", "source": "quotes", "title": "Quote cost: price plus lost sales ($)", "x": "supplier",
+              "y": ["landed_cost", "lost_margin"]},
+             {"type": "column", "source": "cash_stages", "title": "PayPal cash after each stage ($)", "x": "stage", "y": ["cash_after"]},
+             {"type": "bar", "source": "delays", "title": "Average delivery delay (days)", "x": "supplier", "y": ["avg_delay_days"]},
              {"type": "line", "source": "product_a_margin", "title": "Product A: profit per unit", "x": "month", "y": ["profit_per_unit", "purchase_cost"]},
+             {"type": "grid", "source": "payment_plan", "title": "Pay-and-collect plan",
+              "cols": ["step", "when", "action", "counterparty", "reference", "amount", "discount_usd", "cash_effect", "why", "source"]},
+             {"type": "grid", "source": "quotes", "title": "Supplier quotes ranked by real cost",
+              "cols": ["rank", "supplier", "current", "unit_price", "lead_days", "history", "stockout_days", "landed_cost", "lost_margin", "total_cost", "deposit"]},
              {"type": "grid", "source": "scorecard", "title": "Supplier scorecard",
               "cols": ["supplier", "country", "pos", "avg_delay_days", "on_time_pct", "reliability_score", "spend"]}],
-            [{"id": f"payout-po{po['po_id']}", "kind": "payout", "label": f"Pay PO #{po['po_id']} ({po['name']})", "amount": po["amount"],
-              "currency": "USD", "recipient": po["name"], "email": email("supplier", po["supplier_id"]),
-              "source": f"Purchase order #{po['po_id']} (in transit)", "why": "Reliable supplier, smallest open PO."},
-             {"id": "switch-draft", "kind": "draft", "label": f"Draft switch: {slow['supplier']} -> {alt['supplier']}", "amount": 0,
-              "currency": "USD", "recipient": "Procurement lead", "source": "scorecard", "why": "Most reliable on-time alternative."}],
-            ["Switching suppliers needs requalification; check capacity before moving volume."])
+            actions,
+            [f"Quotes came from: {ctx['quotes_source']}. Lost sales = days of stock-out x daily demand x margin; a supplier with no history is assumed {ASSUMED_NEW_DELAY:g} days late.",
+             f"Balance source: {bal['source']}. Collections assume {COLLECT_PCT:.0%} of each overdue invoice arrives.",
+             f"{RESERVE_PCT:.0%} of cash is kept in reserve. Switching suppliers needs requalification; check capacity before moving volume."],
+            self.lineage(ctx))
+        deadlines = self.deadlines(ctx, now, later, run)
+        if deadlines:
+            f.actions.append({"id": "calendar-deadlines", "kind": "calendar", "label": f"Put {len(deadlines)} payment deadlines on your Calendar, with alarms",
+                              "amount": 0, "currency": "USD", "recipient": "Calendar", "source": "pay-and-collect plan",
+                              "why": "; ".join(d["title"] for d in deadlines[:3]) + ("..." if len(deadlines) > 3 else ""), "events": deadlines})
+        if ctx.get("research_log"):  # several sites were read: show what was found, and ask for the quotes that have no price
+            f.tables["research_log"] = ctx["research_log"]
+            f.widgets.insert(4, {"type": "grid", "source": "research_log", "title": "Supplier sites BizOS read in Chrome",
+                                 "cols": ["site", "country", "unit_price", "moq", "lead_days", "terms", "status"]})
+            f.kpis.insert(0, kpi("Supplier sites read", len(ctx["research_log"])))
+        for u in ctx.get("unpriced", []):
+            f.actions.append({"id": "rfq-" + re.sub(r"\W+", "-", u["supplier"].lower()).strip("-"), "kind": "draft",
+                              "label": f"Request a quote from {u['supplier']}", "amount": 0, "currency": "USD", "recipient": u["supplier"],
+                              "source": u.get("url") or "supplier site",
+                              "why": f"{u['supplier']} publishes no price (MOQ {u['moq']}, {u['lead_days']}d lead): ask before ranking it."})
+        return f
 
 
 # ---------------------------------------------------------------- Sales

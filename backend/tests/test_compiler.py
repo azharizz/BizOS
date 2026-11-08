@@ -86,3 +86,9 @@ def test_whole_number_kpis_show_without_decimals():
     canvas.add_kpi("Blend price", 0.03)
     assert canvas.source("kpi_models_released")["fields"][0]["format"] == "integerFormat"
     assert canvas.source("kpi_blend_price")["fields"][0]["format"] == "decimalFormat"
+
+
+def test_html_entities_the_model_writes_into_titles_are_decoded():
+    ws, canvas = build("finance")
+    pid = canvas.add_page("Pay &amp; Collect")
+    assert next(p for p in canvas.ws["pages"] if p["id"] == pid)["title"] == "Pay & Collect"

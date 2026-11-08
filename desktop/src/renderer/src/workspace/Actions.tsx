@@ -5,9 +5,9 @@ import { api, bizos } from '../lib/bridge'
 import { money } from '../lib/format'
 import type { ActionSpec, Preview, Result } from './types'
 
-const KIND = { payout: 'PayPal Payout', invoice_reminder: 'PayPal Invoice', draft: 'Draft', paypal: 'PayPal' } as const
+const KIND = { payout: 'PayPal Payout', invoice_reminder: 'PayPal Invoice', draft: 'Draft', paypal: 'PayPal', calendar: 'Calendar' } as const
 const words = (s = '') => s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-const MODE = { sandbox: 'Sandbox', 'preview-only': 'Preview only', draft: 'Draft, no money moves' } as const
+const MODE = { sandbox: 'Sandbox', 'preview-only': 'Preview only', draft: 'Draft, no money moves', local: 'On this Mac' } as const
 const soft = { type: 'spring', stiffness: 300, damping: 30 } as const
 
 const savedApprover = () => { try { return localStorage.getItem('bizos.approver') ?? '' } catch { return '' } }
@@ -122,7 +122,7 @@ function Stamp({ result, mode, payout, live: at }: { result: Result; mode: Previ
     queryFn: () => api<{ status: string | null }>('/actions/status', { workspace_id: at!.wsId, action_id: at!.id }),
     enabled: !!at && !!result.reference, refetchInterval: 15_000,
   })
-  const word = result.status === 'DRAFTED' ? 'Drafted' : result.status === 'PREVIEW_ONLY' ? 'Previewed' : 'Approved'
+  const word = result.status === 'DRAFTED' ? 'Drafted' : result.status === 'SCHEDULED' ? 'Scheduled' : result.status === 'PREVIEW_ONLY' ? 'Previewed' : 'Approved'
   const [copied, setCopied] = useState(false)
   return (
     <motion.div className="stamp-wrap" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>

@@ -7,6 +7,9 @@ from . import config
 
 
 def _connect() -> sqlite3.Connection:
+    if not config.DB_PATH.exists():  # fresh clone: build the deterministic mock company
+        from . import seed
+        seed.build(config.DB_PATH)
     con = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     return con
@@ -34,7 +37,7 @@ def schema() -> str:
 _ALLOWED = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
 
 
-def safe_query(sql: str, limit: int = 200, seconds: float = 3.0) -> list[dict]:
+def safe_query(sql: str, limit: int = 2000, seconds: float = 10.0) -> list[dict]:
     """Agent-written SQL: one SELECT/WITH statement, read-only by authorizer, row- and time-limited."""
     sql = sql.strip().rstrip(";")
     if not re.match(r"(?is)^\s*(select|with)\b", sql) or ";" in sql:

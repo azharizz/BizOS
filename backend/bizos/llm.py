@@ -20,12 +20,12 @@ _PIXEL = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAAA1BMVEX/AAAZ4gk3AAAADE
 def model() -> OpenAIChatCompletionsModel | None:
     if not (config.AGENT_API_KEY and config.AGENT_BASE_URL and config.AGENT_MODEL):
         return None
-    client = AsyncOpenAI(base_url=config.AGENT_BASE_URL, api_key=config.AGENT_API_KEY, timeout=90)
+    client = AsyncOpenAI(base_url=config.AGENT_BASE_URL, api_key=config.AGENT_API_KEY, timeout=240)
     return OpenAIChatCompletionsModel(model=config.AGENT_MODEL, openai_client=client)
 
 
 async def _chat(**body) -> dict:
-    async with httpx.AsyncClient(base_url=config.AGENT_BASE_URL, timeout=90,
+    async with httpx.AsyncClient(base_url=config.AGENT_BASE_URL, timeout=240,
                                  headers={"Authorization": f"Bearer {config.AGENT_API_KEY}"}) as c:
         r = await c.post("/chat/completions", json={"model": config.AGENT_MODEL, **body})
         r.raise_for_status()

@@ -158,7 +158,7 @@ function Ask({ s }: { s: State }) {
           <button type="button" onClick={actions.fresh} title="Start a new workspace instead of editing this one">New</button>
         </div>
       )}
-      <input ref={focusOnMount} name="goal" autoComplete="off" spellCheck={false} disabled={busy}
+      <input ref={focusOnMount} name="goal" autoComplete="off" spellCheck={false} disabled={busy && !s.question}
         placeholder={s.dictating ? 'Speak now…' : "Ask about what's on screen…"} aria-label="What should BizOS investigate?" />
       <button className="ask-go" disabled={busy} aria-label="Investigate">
         <svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>

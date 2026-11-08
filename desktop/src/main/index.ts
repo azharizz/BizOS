@@ -15,7 +15,18 @@ import { createDesktop } from './desktop'
 import { createSpeaker, createVoice } from './voice'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
-const ROOT = resolve(app.getAppPath(), '../..') // repo root in dev: app/desktop -> ../..
+// The project folder (backend, .env). In dev it is the repo; an installed BizOS.app reads it from build/home.txt, written at build time.
+function homeDir(): string {
+  if (process.env.BIZOS_HOME) return process.env.BIZOS_HOME
+  if (app.isPackaged) {
+    try { return readFileSync(join(app.getAppPath(), 'build/home.txt'), 'utf8').trim() } catch { /* fall through to the dev layout */ }
+  }
+  return resolve(app.getAppPath(), '..')
+}
+const ROOT = homeDir()
+// Prefer the project's own Python (no uv needed, and an app started from Finder has a bare PATH); fall back to uv.
+const VENV_PYTHON = join(ROOT, 'backend/.venv/bin/python')
+const python = (args: string[]): [string, string[]] => (existsSync(VENV_PYTHON) ? [VENV_PYTHON, args] : ['uv', ['run', 'python', ...args]])
 const HOTKEY = 'CommandOrControl+Shift+Space'
 const SIZE = { width: 460, height: 660 }
 const ICON = join(app.getAppPath(), 'build/icon.png')
@@ -50,8 +61,9 @@ function readEnv(path: string): Record<string, string> {
 
 function startBackend() {
   if (env.BIZOS_BACKEND_URL) return // remote backend (Docker / Cloud Run)
-  backend = spawn('uv', ['run', 'uvicorn', 'bizos.main:app', '--host', '127.0.0.1', '--port', '8787'], {
-    cwd: join(ROOT, 'app/backend'), env: { ...process.env, BIZOS_TOKEN: config.token }, stdio: 'inherit',
+  const [cmd, args] = python(['-m', 'uvicorn', 'bizos.main:app', '--host', '127.0.0.1', '--port', '8787'])
+  backend = spawn(cmd, args, {
+    cwd: join(ROOT, 'backend'), env: { ...process.env, BIZOS_TOKEN: config.token }, stdio: 'inherit',
   })
   backend.on('error', (e) => console.error('[bizos] backend failed to start (is uv installed?)', e.message))
 }
@@ -66,7 +78,8 @@ const handsFree = (status: typeof wakeStatus, error?: string) => {
 function startWake() {
   if (wake) return
   handsFree('starting')
-  const proc = spawn('uv', ['run', 'python', '-m', 'bizos.wake'], { cwd: join(ROOT, 'app/backend'), stdio: ['ignore', 'pipe', 'inherit'] })
+  const [cmd, args] = python(['-m', 'bizos.wake'])
+  const proc = spawn(cmd, args, { cwd: join(ROOT, 'backend'), stdio: ['ignore', 'pipe', 'inherit'] })
   wake = proc
   let error = ''
   createInterface({ input: proc.stdout! }).on('line', (line) => {
@@ -85,6 +98,7 @@ function startWake() {
   })
 }
 const stopWake = () => { wake?.kill(); wake = null }
+
 
 function load(win: BrowserWindow, hash = '') {
   const dev = process.env.ELECTRON_RENDERER_URL

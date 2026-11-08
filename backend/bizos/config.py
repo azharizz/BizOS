@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_env(path: Path) -> dict[str, str]:
@@ -20,9 +20,10 @@ AGENT_MODEL = _env.get("AGENT_MODEL", "")
 PAYPAL_CLIENT_ID = _env.get("PAYPAL_CLIENT_ID", "")
 PAYPAL_CLIENT_SECRET = _env.get("PAYPAL_CLIENT_SECRET", "")
 PAYPAL_SANDBOX_RECEIVER = _env.get("PAYPAL_SANDBOX_RECEIVER", "")  # a sandbox personal account, so test money settles
+PAYPAL_DEMO_SCALE = float(_env.get("PAYPAL_DEMO_SCALE") or 1)  # Sandbox only: send this share of each payout when the Sandbox balance is small
 PAYPAL_RETURN_URL = _env.get("PAYPAL_RETURN_URL", "https://www.paypal.com")  # where a payment link sends buyers after paying
 PAYPAL_BASE_URL = _env.get("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com").rstrip("/")
 EXTENSION_TOKEN = _env.get("BIZOS_EXTENSION_TOKEN", "")
 DB_PATH = Path(_env.get("BIZOS_DB", ROOT / "data" / "mock" / "bizos.db"))
-AUDIT_PATH = Path(_env.get("BIZOS_AUDIT", ROOT / "app" / "backend" / "audit.jsonl"))
+AUDIT_PATH = Path(_env.get("BIZOS_AUDIT", ROOT / "backend" / "audit.jsonl"))
 MEMORY_PATH = Path(_env.get("BIZOS_MEMORY", Path.home() / ".bizos" / "memory.db"))  # long-term memory, local

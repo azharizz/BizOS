@@ -4,7 +4,7 @@ import type { WorkspaceTheme } from './theme'
 
 export interface ActionSpec {
   id: string
-  kind: 'payout' | 'invoice_reminder' | 'draft' | 'paypal'
+  kind: 'payout' | 'invoice_reminder' | 'draft' | 'paypal' | 'calendar'
   label: string
   amount: number
   currency: string
@@ -22,7 +22,7 @@ export interface ActionSpec {
   result?: Result
 }
 
-export interface Preview extends ActionSpec { mode: 'sandbox' | 'preview-only' | 'draft'; idempotency_key: string }
+export interface Preview extends ActionSpec { mode: 'sandbox' | 'preview-only' | 'draft' | 'local'; idempotency_key: string }
 export interface Result { status: string; reference: string | null; link?: string | null }
 export interface Page { id: string; title: string }
 

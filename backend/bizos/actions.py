@@ -12,6 +12,7 @@ The general PayPal tool is one list of approved endpoints (`CATALOG`), each with
     money  moves money (refund, capture, payout): proposed, then a person approves it
 Card, vault and identity endpoints are never on the list, so no prompt can reach them.
 """
+import asyncio
 import copy
 import functools
 import hashlib
@@ -31,6 +32,12 @@ class ApprovalRequired(Exception):
     pass
 
 
+INSUFFICIENT = ("PayPal would not send this payment: the account does not have enough available money right now. Payouts to "
+                "addresses without a PayPal account stay UNCLAIMED and hold their money for 30 days; set PAYPAL_SANDBOX_RECEIVER "
+                "to a Sandbox personal account email so test payouts settle, or add funds in the PayPal Developer dashboard.")
+HOLDING = ("UNCLAIMED", "PENDING", "ONHOLD", "BLOCKED")
+
+
 class PayPalError(RuntimeError):
     """PayPal said no. `status` < 500 means the request itself was wrong (shown to the user as is)."""
 
@@ -47,6 +54,9 @@ def _check(r: httpx.Response, api: str):
     if r.is_error:
         body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
         why = "; ".join(f"{d.get('field', '')} {d.get('issue', '')} {d.get('description', '')}".strip() for d in body.get("details") or [])
+        text = f"{body.get('name', '')} {body.get('message', '')} {why}".lower()
+        if "insufficient" in text or "not have sufficient funds" in text:
+            raise PayPalError(INSUFFICIENT, r.status_code)
         raise PayPalError(f"PayPal {api} error {r.status_code}: {body.get('message') or r.text[:200]}"
                           f"{f' ({why})' if why else ''} (debug_id {body.get('debug_id')})", r.status_code)
 
@@ -54,7 +64,7 @@ def _check(r: httpx.Response, api: str):
 class PayPal:
     def __init__(self, client_id: str, secret: str, base_url: str, transport: httpx.AsyncBaseTransport | None = None):
         self._auth = (client_id, secret)
-        self.http = httpx.AsyncClient(base_url=base_url, transport=transport, timeout=20)
+        self.http = httpx.AsyncClient(base_url=base_url, transport=transport, timeout=60)
         self._token, self._expires = "", 0.0
 
     async def _headers(self, request_id: str) -> dict:
@@ -66,6 +76,8 @@ class PayPal:
         return {"Authorization": f"Bearer {self._token}", "PayPal-Request-Id": request_id}
 
     async def payout(self, spec: dict, key: str) -> dict:
+        scale = config.PAYPAL_DEMO_SCALE  # 1.0 normally; below 1 only when the Sandbox balance is small (the card says so)
+        spec = {**spec, "amount": round(spec["amount"] * scale, 2)}
         body = {"sender_batch_header": {"sender_batch_id": key, "email_subject": f"Payment from BizOS: {spec['source']}"},
                 "items": [{"recipient_type": "EMAIL", "receiver": spec["email"], "sender_item_id": spec["id"], "note": spec["source"],
                            "amount": {"value": f"{spec['amount']:.2f}", "currency": spec["currency"]}}]}
@@ -108,6 +120,20 @@ class PayPal:
             raise PermissionError(f"{endpoint} changes something at PayPal: it needs approval. Propose it instead (paypal_propose).")
         return await self.call(endpoint, params, query, body)
 
+    async def held_by_payouts(self, batches: list[str]) -> float:
+        """Money still tied up in payouts we sent (unclaimed, pending, on hold), fees included: the balance endpoint lags."""
+        total = 0.0
+        for b in batches:
+            try:
+                body = await self._get(f"/v1/payments/payouts/{b}")
+            except Exception:
+                continue
+            for it in body.get("items", []):
+                if it.get("transaction_status") in HOLDING:
+                    total += float((it.get("payout_item") or {}).get("amount", {}).get("value", 0)) \
+                        + float((it.get("payout_item_fee") or {}).get("value", 0))
+        return round(total, 2)
+
     # ---- read-only (agent tools)
     async def _get(self, path: str, **params) -> dict:
         r = await self.http.get(path, params=params, headers={"Authorization": (await self._headers("read"))["Authorization"]})
@@ -133,6 +159,38 @@ class PayPal:
         items = body.get("items") or [{}]
         return {"batch": body["batch_header"]["batch_status"], "item": items[0].get("transaction_status"),
                 "errors": (items[0].get("errors") or {}).get("message")}
+
+
+def executed_payout_batches(audit_path: Path | None = None, days: int = 31, after: datetime | None = None) -> list[str]:
+    """Batch ids of payouts BizOS sent recently (from the audit log), optionally only those sent after `after`."""
+    path = Path(audit_path or config.AUDIT_PATH)
+    if not path.exists():
+        return []
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    out = []
+    for line in path.read_text().splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        ref = (e.get("result") or {}).get("reference")
+        if e.get("kind") == "payout" and e.get("outcome") == "executed" and ref and datetime.fromisoformat(e["at"]) > max(since, after or since):
+            out.append(ref)
+    return list(dict.fromkeys(out))
+
+
+async def net_balance(paypal: "PayPal") -> dict:
+    """What can really be sent now: the balance minus money held in our own unsettled payouts. In demo scale, in plan dollars."""
+    body = await paypal.read("balances")
+    usd = next(b for b in body["balances"] if b["currency"] == "USD")
+    available = float(usd["available_balance"]["value"])
+    # The balance endpoint is a periodic snapshot (as_of_time): payouts sent before it are already in the figure, later ones are not.
+    snap = datetime.fromisoformat(body["as_of_time"]) if body.get("as_of_time") else None
+    held = await paypal.held_by_payouts(executed_payout_batches(after=snap))
+    scale = config.PAYPAL_DEMO_SCALE or 1.0
+    return {"available": round(max(available - held, 0.0) / scale, 2), "sandbox_available": round(max(available - held, 0.0), 2),
+            "listed": available, "held": held, "withheld": float((usd.get("withheld_balance") or {}).get("value", 0)),
+            "scale": scale, "as_of": body.get("as_of_time", "")}
 
 
 # ---- the approved PayPal endpoints
@@ -268,7 +326,12 @@ async def _paypal(paypal, spec, key):
     return _result(await paypal.call(spec["endpoint"], spec["params"], body=spec["body"], key=key))
 
 
-ACTIONS = {"payout": _payout, "invoice_reminder": _remind, "draft": _draft, "paypal": _paypal}
+async def _calendar(_paypal, spec, _key):
+    from . import mac
+    return await asyncio.to_thread(mac.schedule, spec["events"])
+
+
+ACTIONS = {"calendar": _calendar, "payout": _payout, "invoice_reminder": _remind, "draft": _draft, "paypal": _paypal}
 
 
 def make_action(kind: str):
@@ -332,7 +395,7 @@ class ActionEngine:
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     def preview(self, ws_id: str, spec: dict) -> dict:
-        mode = "draft" if spec["kind"] == "draft" else "sandbox" if self.paypal else "preview-only"
+        mode = "draft" if spec["kind"] == "draft" else "local" if spec["kind"] == "calendar" else "sandbox" if self.paypal else "preview-only"
         return {**{k: spec.get(k) for k in ("id", "kind", "label", "amount", "currency", "recipient", "email", "source", "why",
                                              "endpoint", "tier", "request", "body")},
                 "mode": mode, "idempotency_key": self.key(ws_id, spec)}
