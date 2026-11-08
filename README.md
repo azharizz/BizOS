@@ -1,151 +1,296 @@
-# BizOS AI
+<p align="center">
+  <img src="submission/assets/bizos-banner.png" alt="BizOS: Ask. Check. Approve." width="100%">
+</p>
 
-A floating overlay that reads what you're looking at (screen + Chrome DOM), lets an agent investigate it against
-company data, compiles an AG Studio workspace, and lets a person approve real PayPal Sandbox actions.
+<div align="center">
 
-```
-backend/                Python · FastAPI · OpenAI Agents SDK
-  bizos/
-    agent.py            Session: planner agent -> user approves -> analyst agent (tools, streamed brief)
-    tools.py            agent tools: verified flow steps, guarded SQL, Chrome DOM, PayPal reads, canvas design
-    flows.py            7 department flows (factory + @register), each step verified; Procurement is the cash-aware hub
-    seed.py             deterministic mock company (data/mock/bizos.db); built on first run if missing
-    compiler.py         the AG Studio canvas: widget factory, grid placement + compaction, default layout
-    actions.py          PayPal client, action factory, @audited @requires_approval @idempotent
-    bridge.py           Chrome extension hub (request/response over WebSocket)
-    llm.py              model for the SDK + startup capability check + L3 vision
-    main.py             /ws /ext /workspaces /actions/* /paypal/payouts/* /extension /audit /health
-  tests/                190 tests
-desktop/                Electron · React · Vite (overlay pill + workspace window)
-chrome_extension/       MV3: background.js, content_script.js, popup, options (bridge URL + token)
-data/mock/bizos.db      the mock company the flows read (regenerate: cd backend && uv run python -m bizos.seed)
-```
+<h1>BizOS</h1>
 
-## Cash-aware procurement (the flagship flow)
+**One question. An AI agent checks real suppliers, builds the answer in AG Studio, and pays through PayPal when you approve.**
 
-With the Chrome extension connected and a marketplace page in front (sample: `http://127.0.0.1:8787/demo/market`), BizOS
-opens each supplier's own site in Chrome, reads its quote whatever the layout, and asks for a quote where none is published.
-It also reads a single quotes table (sample page at `http://127.0.0.1:8787/demo/sourcing`), ranks them by what they really cost (price plus the sales lost while stock is
-out), selects the winner on the page (the final **Confirm order** click always asks first) and puts its deposit at the
-front of the pay-and-collect plan. Without Chrome the same quotes come from a built-in copy. Every plan row has a
-`source` column, and the workspace draws a **Where the data came from** diagram. Recording guide: `demo/README.md`.
+*Monday used to take all day. Now it takes one question.*
 
+<p>
+  <img alt="PayPal" src="https://img.shields.io/badge/PayPal-35_actions-003087?style=for-the-badge&logo=paypal&logoColor=white">
+  <img alt="AG Studio" src="https://img.shields.io/badge/AG_Studio-42_widget_kinds-2BB673?style=for-the-badge">
+  <img alt="Agentic commerce" src="https://img.shields.io/badge/Agentic_commerce-asks_before_it_buys-4DFFB2?style=for-the-badge&labelColor=0E0F0C">
+</p>
+<p>
+  <img alt="OpenAI Agents SDK" src="https://img.shields.io/badge/OpenAI_Agents_SDK-planner_+_analyst-0E0F0C?style=flat-square&logo=openai">
+  <img alt="Electron" src="https://img.shields.io/badge/Electron-overlay-47848F?style=flat-square&logo=electron&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-backend-009688?style=flat-square&logo=fastapi&logoColor=white">
+  <img alt="Chrome" src="https://img.shields.io/badge/Chrome-MV3_extension-4285F4?style=flat-square&logo=googlechrome&logoColor=white">
+  <img alt="Mermaid" src="https://img.shields.io/badge/Mermaid-17_diagram_types-FF3670?style=flat-square&logo=mermaid&logoColor=white">
+  <img alt="Platforms" src="https://img.shields.io/badge/macOS_+_Windows-desktop-ECE8DF?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-252_passing-12B877?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/license-Apache_2.0-9A958A?style=flat-square">
+</p>
 
-Procurement is where every department's decision turns into a payment, so one flow joins them and lets PayPal be the
-cash rail: **collect, hold, pay, confirm**.
+<a href="submission/bizos-demo-2m58.mp4"><b>▶ Watch the 2:58 film</b></a> ·
+<a href="submission/submission-description.md">Submission</a> ·
+<a href="#-the-bizos-loop">The loop</a> ·
+<a href="#-ag-studio-taken-to-the-next-level">AG Studio</a> ·
+<a href="#-paypal-is-the-money-rail">PayPal</a> ·
+<a href="#-run-it">Run it</a> ·
+<a href="#truth-boundaries">Truth boundaries</a>
 
-| Question | Department data | PayPal |
+<sub>Press one shortcut over any app → BizOS plans → reads the web, your data and PayPal → builds a live AG Studio workspace → you hold to approve → PayPal acts.</sub>
+
+</div>
+
+<p align="center">
+  <img src="submission/assets/film-hero.gif" alt="BizOS in 12 seconds" width="80%">
+</p>
+
+> [!IMPORTANT]
+> Everything in the demo runs for real: real AI agent, real Chrome browsing, real AG Studio workspaces, real PayPal REST calls.
+> The marketplace and the company are **sample data**, and PayPal runs in the **Sandbox** (payouts at 10% demo scale so a small sandbox balance lasts).
+
+<details>
+<summary><kbd>Contents</kbd></summary>
+
+- [⚡ At a glance](#-at-a-glance)
+- [The problem](#the-problem)
+- [🔁 The BizOS loop](#-the-bizos-loop)
+- [🎬 See it work](#-see-it-work)
+- [📊 AG Studio, taken to the next level](#-ag-studio-taken-to-the-next-level)
+- [💸 PayPal is the money rail](#-paypal-is-the-money-rail)
+- [🧭 Beyond procurement](#-beyond-procurement)
+- [📈 Impact](#-impact)
+- [🏗️ How it's built](#️-hows-its-built)
+- [🖼️ Screenshots](#️-screenshots)
+- [🚀 Run it](#-run-it)
+- [Truth boundaries](#truth-boundaries)
+- [Repository map](#repository-map)
+
+</details>
+
+## ⚡ At a glance
+
+<table>
+<tr>
+<td width="25%" align="center"><b>01 · ASK</b><br><sub>⌘⇧Space over any app.<br>Type it or say it.</sub></td>
+<td width="25%" align="center"><b>02 · CHECK</b><br><sub>The AI plans first, then reads real supplier sites, your data and PayPal.</sub></td>
+<td width="25%" align="center"><b>03 · SEE</b><br><sub>The answer arrives as a live AG Studio workspace the AI designed itself.</sub></td>
+<td width="25%" align="center"><b>04 · APPROVE</b><br><sub>Hold to approve. Only then does PayPal pay, bill or refund.</sub></td>
+</tr>
+</table>
+
+## The problem
+
+Every Monday, a small-business owner asks the same three questions:
+
+> **Who should I buy from? Can I afford it? Who still owes me?**
+
+The answers live in three places that don't talk: **supplier websites**, **spreadsheets**, and **PayPal**. It takes twelve tabs and a whole morning. And it's not one shop's problem:
+
+<p align="center">
+  <img src="submission/assets/gif-problem.gif" alt="$355B owed to US small businesses" width="72%">
+</p>
+
+<p align="center"><sub>36.2M US small businesses (SBA 2026) × 56% owed money × $17,500 average (Intuit QuickBooks 2025) ≈ <b>$355B waiting in unpaid invoices</b>. Our math.</sub></p>
+
+BizOS was born in **procurement**, because that's where stock, suppliers, invoices and cash all meet, and every decision there ends as a payment.
+
+## 🔁 The BizOS loop
+
+| Step | What happens | What can never happen silently |
 |---|---|---|
-| Which products will stock out, and which open POs feed them? | Operations (stock risk) | |
-| Which suppliers are late, and what is their early-pay discount? | Procurement (scorecard, terms) | |
-| What can we spend today? | Finance | **Balances** (live, withheld funds included) |
-| What do customers owe? | Sales (overdue invoices) | **Invoicing** payment requests |
-| Pay a supplier | | **Payouts**, press-and-hold approval |
+| **Ask** | ⌘⇧Space (Ctrl+Shift+Space on Windows) opens a floating overlay over any app. Type or talk. | Nothing runs yet. |
+| **Plan** | The AI planner draws its plan as a graph: what it will read, what waits for what. | Nothing runs until you've seen the plan. |
+| **Check** | The agent drives **real Chrome** to read each supplier's own page, queries company data, and reads PayPal (balance, invoices, transactions). | Before any risky click (*Confirm order*), it asks: **Yes, do it / No**. |
+| **See** | It designs a live **AG Studio** workspace: AG Grid tables, charts, plan graph, diagrams, and PayPal action cards. | Every number keeps its **source** (web, data, or PayPal). |
+| **Approve** | You **hold to approve**. PayPal sends the payout, the invoice, the refund. Due dates go on your calendar. | Money only moves on a human press-and-hold. Each approval is sent **once** and logged. |
 
-The plan (an AG Grid, a cash-after-each-stage chart and the supplier scorecard) schedules payments against
-the cash on hand with a 10% reserve: early-pay discounts first, then stock-out risk, then due date. A slow supplier
-(avg delay over 3 days) is paid **on receipt**, not in advance. What cash cannot cover waits for collections: the
-largest overdue invoices are chased first (a PayPal payment request each), assuming 70% arrives. A discount that ends
-before collections land is shown as lost. Try: *"Which suppliers should I pay this week, and can I afford it?"* The scheduling
-rule is a pure function (`flows.plan_run`), covered by tests; the cash comes from the live Sandbox balance, or a
-5,000 USD demo balance when PayPal is not connected (the plan says which).
+## 🎬 See it work
 
-## Run
+<table>
+<tr>
+<td width="50%"><img src="submission/assets/gif-ask.gif" width="100%"><br><sub><b>1 · Ask.</b> One shortcut over any app; the AI writes its plan first.</sub></td>
+<td width="50%"><img src="submission/assets/gif-agentic.gif" width="100%"><br><sub><b>2 · Agentic commerce.</b> It reads every supplier's real page in Chrome, and asks before it confirms the order.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="submission/assets/gif-build.gif" width="100%"><br><sub><b>3 · Built live.</b> The AI designs the AG Studio workspace in front of you, widget by widget.</sub></td>
+<td width="50%"><img src="submission/assets/gif-cash.gif" width="100%"><br><sub><b>4 · Can I afford it?</b> Live PayPal balance, minus money already leaving, minus a 10% cushion.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="submission/assets/gif-approve.gif" width="100%"><br><sub><b>5 · Hold to approve.</b> PayPal Invoicing bills the late customer; PayPal Payouts pays the supplier.</sub></td>
+<td width="50%"><img src="submission/assets/gif-close.gif" width="100%"><br><sub><b>6 · Done.</b> The whole Monday, on one page.</sub></td>
+</tr>
+</table>
+
+## 📊 AG Studio, taken to the next level
+
+BizOS doesn't just *show* a grid. **The AI builds an entire AG Studio workspace for every question**, and BizOS **extends AG Studio itself** with its own widgets.
+
+<table>
+<tr>
+<td width="50%"><img src="submission/assets/gif-ag-explode.gif" width="100%"><br><sub><b>A whole workspace, not a chart.</b> AG Grid, AG Charts, a combo chart, a gantt diagram, a live plan, PayPal approval cards, all placed by the AI.</sub></td>
+<td width="50%"><img src="submission/assets/gif-ag-compose.gif" width="100%"><br><sub><b>BizOS widgets inside AG Studio.</b> Plan graph, Diagram, Ideas map, Summary, Text and <b>PayPal action</b> sit in AG Studio's own Compose menu.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="submission/assets/gif-ag-ideas.gif" width="100%"><br><sub><b>The dashboard asks back.</b> Click an idea on the Ideas map and BizOS starts the next investigation.</sub></td>
+<td width="50%"><img src="submission/assets/gif-ag-trio.gif" width="100%"><br><sub><b>Every question gets its own design.</b> Three real runs, three different AI-designed workspaces.</sub></td>
+</tr>
+</table>
+
+| What BizOS does with AG Studio | How |
+|---|---|
+| **AI designs the whole canvas** | The compiler picks from **42 widget kinds** (grid, pivot, KPI, 20 chart types, combo, scatter/bubble, treemap, sunburst, gauges, list/date/button filters, text, image), sizes them on a 12-column grid, packs them, names the **pages** and sets a **theme**. |
+| **Custom widgets in AG Studio's own menu** | `createWidgets({ additionalTypes })` registers **Plan graph · Diagram · Ideas map · Summary · Text · PayPal action** under a **BizOS** section. Each has an `ai` description so AG Studio's own AI tools know them too. |
+| **17 Mermaid diagram types** | Flowchart, gantt, timeline, sequence, mind map, ER, sankey and more, with expand, zoom and pan. |
+| **PayPal approvals inside the dashboard** | A PayPal action card is a real AG Studio widget: press and hold to approve, live status on the card. |
+| **Ask again, same page** | Follow-up questions edit the **same** workspace live (no remount, no flicker). |
+| **You and the AI co-edit safely** | Your *Edit layout* changes are saved; the agent builds on them. A version check stops an older window from erasing newer agent widgets. |
+| **Every number has a source** | A *Where the data came from* diagram links each number to Chrome, company data or PayPal. |
+
+## 💸 PayPal is the money rail
+
+<table>
+<tr>
+<td width="40%" align="center"><img src="submission/assets/money-loop.gif" width="100%"></td>
+<td width="60%">
+
+**Money in, money out, all through PayPal.**
+
+- **Hold:** Balances, minus payouts still settling, minus a 10% safety cushion
+- **Collect:** Invoicing (create, send, remind), Payment Links, Orders + Capture
+- **Pay:** Payouts, by press-and-hold
+- **Confirm:** payout and invoice status, Transaction Search, webhooks
+- **Fix:** Refunds and Disputes, as approval cards
+
+</td>
+</tr>
+</table>
+
+| Risk level | # | Who acts | PayPal actions |
+|---|---|---|---|
+| **Read** | 18 | BizOS, automatically | Balances · Transaction Search · Invoices (list, get, search) · Disputes · Payout status · Orders · Captures · Refunds · Catalog products · Billing plans · Subscriptions · Payment links · Webhooks |
+| **Act** | 13 | You approve a card | Invoice create / **send** / **remind** / cancel / record payment · Payment link create / update / delete · Product · Order · Plan · Subscription cancel · Dispute message |
+| **Money** | 4 | You **press and hold** | **Payouts** · **Refund** · **Order capture** · **Accept dispute claim** |
+
+<table>
+<tr>
+<td width="50%"><img src="submission/assets/gif-refunds.gif" width="100%"><br><sub>Refunds and disputes land in the dashboard as cards, ready to approve.</sub></td>
+<td width="50%"><img src="submission/assets/gif-35.gif" width="100%"><br><sub>35 PayPal actions in 3 risk levels. Card, vault and identity endpoints are not on the list at all.</sub></td>
+</tr>
+</table>
+
+- **Approving twice never pays twice:** every action carries an idempotency key (`PayPal-Request-Id`, `sender_batch_id`).
+- **Every action is audited** with who approved it.
+- **Cash gate:** each payout is re-checked against the live balance right before it's sent; a refusal is explained, not hidden.
+
+## 🧭 Beyond procurement
+
+Procurement is the start. The same planner covers **seven verified department flows** (CEO, Finance, Marketing, Engineering, Operations, Procurement, Sales), plus a **general mode** where the agent writes its own queries and designs the workspace from them.
+
+| Ask | What BizOS does |
+|---|---|
+| *"Find new suppliers for 300 coffee sets"* | Searches the open web, crawls real supplier sites, builds a weighted decision matrix. **No price? It says N/A, and drafts a quote request.** |
+| *"Do invoices and payments reconcile?"* | Finance flow: matches PayPal transactions against invoices. |
+| *"Which accounts need attention?"* | Sales flow: who is late, who is slipping, what to chase first. |
+| *"Which products will stock out?"* | Operations flow: stock cover against demand and open purchase orders. |
+| *"Why did cloud spend jump?"* · *"Is this competitor undercutting us?"* | Engineering and CEO flows, same plan → check → workspace loop. |
+
+## 📈 Impact
+
+<p align="center">
+  <img src="submission/assets/gif-impact.gif" alt="Impact" width="72%">
+</p>
+
+| Result | Why it holds |
+|---|---|
+| **A late invoice gets paid ~2 weeks sooner** | Invoices with a PayPal pay button were paid in 16 days vs 32 (Harvest, 250,000+ invoices). BizOS sends exactly that. |
+| **0 payments over budget** | The cash gate checks the live PayPal balance before every payout (real code, `actions.py`). |
+| **Hours of chasing back every week** | Owners spend ~4 h/week on late invoices and reconciliation (Sage 2025). BizOS turns that into ask → check → approve. |
+| **$3.5B paid sooner** | If 1% of the 20.3M owed businesses use a PayPal pay button: 202,760 × $17,500. Our math. |
+
+## 🏗️ How it's built
+
+<p align="center">
+  <img src="submission/assets/arch.gif" alt="BizOS architecture" width="100%">
+</p>
+
+```mermaid
+flowchart LR
+  U["You<br/>⌘⇧Space · type or talk"] --> O["Overlay<br/>Electron + React"]
+  O --> P["AI planner<br/>OpenAI Agents SDK"]
+  P -->|plan graph| O
+  P --> A["Analyst agent<br/>tools"]
+  A --> C["Chrome MV3 extension<br/>reads real sites"]
+  A --> D["Company data<br/>guarded SQL"]
+  A --> R["PayPal REST<br/>18 read actions"]
+  A --> W["AG Studio compiler<br/>42 widgets + BizOS widgets"]
+  W --> S["Live workspace"]
+  S --> H{{"Hold to approve"}}
+  H --> X["PayPal<br/>Payouts · Invoicing · Refunds"]
+  X -->|status| S
+```
+
+| Layer | Tech | Job |
+|---|---|---|
+| Desktop | Electron · React · Vite · Motion | Floating overlay pill, workspace window, global shortcut, voice (OS dictation + offline "Hey BizOS" wake word via Vosk) |
+| Agents | Python · FastAPI · OpenAI Agents SDK (any OpenAI-compatible model) | Planner agent → user sees plan → analyst agent with tools; streams the brief |
+| Browser | Chrome MV3 extension over a local WebSocket bridge | Reads and operates real pages; risky controls always ask first |
+| Workspace | **AG Studio 3** (AG Grid + AG Charts) · Mermaid · React Flow | AI-compiled canvas, custom BizOS widgets, live in-place updates |
+| Money | **PayPal REST** (Sandbox) | 35 approved actions, 3 risk tiers, idempotent, audited |
+| Desktop actions | macOS Accessibility · Windows UI Automation | Calendar (.ics with alarms), app control with confirmations |
+
+## 🖼️ Screenshots
+
+<table>
+<tr>
+<td width="33%"><img src="submission/screenshots/plan-graph.jpg" width="100%"><br><sub>The plan comes first</sub></td>
+<td width="33%"><img src="submission/screenshots/go-ahead.jpg" width="100%"><br><sub>Asks before it orders</sub></td>
+<td width="33%"><img src="submission/screenshots/live-build.jpg" width="100%"><br><sub>Agent editing the workspace live</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="submission/screenshots/workspace-pay.jpg" width="100%"><br><sub>AG Grid, charts, gantt and PayPal cards</sub></td>
+<td width="33%"><img src="submission/screenshots/hold-approve.jpg" width="100%"><br><sub>Hold to approve</sub></td>
+<td width="33%"><img src="submission/screenshots/paypal-invoice.jpg" width="100%"><br><sub>The invoice, on PayPal's own page</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="submission/screenshots/research-grid.jpg" width="100%"><br><sub>Real supplier sites → AG Grid (N/A, never a guess)</sub></td>
+<td width="33%"><img src="submission/screenshots/lineage.jpg" width="100%"><br><sub>Where the data came from</sub></td>
+<td width="33%"><img src="submission/screenshots/calendar.jpg" width="100%"><br><sub>Due dates on your calendar</sub></td>
+</tr>
+</table>
+
+## 🚀 Run it
 
 ```bash
+# 1. keys: copy into a repo-root .env
+#    AGENT_API_KEY, AGENT_BASE_URL, AGENT_MODEL, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, AG_STUDIO_LICENSE_KEY
+#    (PAYPAL_BASE_URL defaults to the Sandbox; set PAYPAL_SANDBOX_RECEIVER to a sandbox personal account)
+
+# 2. backend + desktop (the desktop app spawns the backend itself)
 cd backend && uv sync
-cd ../desktop && npm install && npm run dev     # spawns the backend itself
+cd ../desktop && npm install && npm run dev
 ```
 
-**Install as a Mac app (local build):** `cd desktop && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir`, then
-`codesign --force --deep --sign - dist/mac-arm64/BizOS.app` and copy it to `~/Applications`. It runs from this project folder (it reads the path from
-`desktop/build/home.txt`, written at build time, and uses `backend/.venv`), so it is a personal build, not a redistributable one. macOS then lists it
-as **BizOS** in Privacy & Security (Microphone for Hands-free).
+- **Chrome:** `chrome://extensions` → Developer mode → Load unpacked → `chrome_extension`, then **Pair Chrome** from the overlay footer.
+- **PayPal Sandbox app features:** Payouts, Invoicing, Transaction Search, Payment Links & Buttons (optional: Disputes, Subscriptions).
+- **Try:** *"Which suppliers should I pay this week, and can I afford it?"* on the sample marketplace (`http://127.0.0.1:8787/demo/market`).
+- Full guide: [`TECHNICAL.md`](TECHNICAL.md) · recording guide: [`demo/README.md`](demo/README.md)
 
-Press **⌘⇧Space** (Ctrl+Shift+Space) over any app and ask anything. Drag the dotted grip on the pill to move the overlay. There are no role tabs: the planner works out
-whether it's an executive, finance, marketing, engineering, operations, procurement or sales question (seven verified
-flows), or something else entirely (`general`: the agent writes its own queries and builds the workspace from them).
-
-- **Plan graph:** before anything runs, the overlay draws the plan as a graph (what waits for what, branches, colour
-  = risk). × skips an optional step; department steps always run. The workspace keeps a live copy (Plan widget).
-- **Workspace:** designed freely in AG Studio: every AG widget (charts, pivot, gauges, scatter/bubble, radar, sunburst,
-  date/list/button filters, text, images), any size and position, any format option, several pages (tabs), a theme per
-  workspace, plus BizOS widgets: **Plan graph**, **Diagram** (Mermaid: flowchart, gantt, timeline, sequence, mind map,
-  ER...), **Ideas map** (click an idea to ask BizOS), **Summary**, **PayPal action**. Asking again **edits the same
-  workspace** live; click **New** to start another. Your own changes in "Edit layout" are kept by later agent edits.
-- **PayPal (general):** the agent can read anything on an approved list of PayPal endpoints (`actions.CATALOG`:
-  balances, transactions, invoices, disputes, payment links, products, subscriptions...) and *propose* any change on it
-  (payment link for a product, invoice, reminder, real refund, dispute reply). A proposal is an action card; only a
-  person executes it, press-and-hold, audited, once per approval. Its live status (e.g. a payment link ACTIVE) shows
-  on the card and the plan graph turns green. Card, vault and identity endpoints are not on the list.
-- **Voice:** the mic button uses the OS's own engine: macOS Dictation (enable it in System Settings → Keyboard →
-  Dictation), Windows voice typing (Win+H, untested). **Hands-free** (footer switch): say "Hey BizOS" any time,
-  even with the overlay closed, and it opens and starts dictating. It's a spoken conversation: after the chime, say
-  the request; a 2 s pause sends it, the plan runs without a click, the answer is read aloud (`say`), and it listens
-  again for a follow-up (8 s of silence ends it). Steps that can lose work (closing an app without saving) and
-  screenshots are asked aloud: say "confirm"/"yes" or "cancel"/"no". PayPal money actions stay press-and-hold. The wake phrase is detected offline
-  (`bizos/wake.py`, Vosk; ~40 MB model downloaded once to `~/.bizos/models`); audio never leaves the machine.
-- **Screenshots (L3):** asked every time (No / Yes, once / **Always yes**). Always yes is global; turn it off from the
-  mint `L3 auto` badge. Every automatic capture is shown on the plan card.
-
-**What the agent can operate** (each step shows live; steps that send, submit, buy or delete always ask first, by
-click or by voice):
-- **Chrome pages** (extension 0.3): numbered page controls; click, type, choose, scroll. Search boxes submit freely;
-  other submits and risky buttons ask. Never types into password or payment fields.
-- **Mac apps** (Accessibility permission, once): read an app's controls and on-screen text, click by name, menus,
-  type (via paste, any language), keys, your Shortcuts, clipboard. Return in messaging apps, Shortcuts and reading
-  the clipboard ask first. Never operates terminals, password managers, System Settings or BizOS itself. Finder works:
-  moving to Trash and Delete ask first.
-- **Windows** (written, not yet run on a PC): the same app tools through Windows UI Automation + SendKeys; your
-  automations live in a `BizOS Shortcuts` folder in your user folder (.lnk, .url, .bat, .cmd, .ps1, always asked);
-  the overlay stays unfocusable until you use it. Never operates PowerShell/cmd/Terminal, the registry, Task Manager,
-  Settings or the credential store.
-- **Stop anytime**: the pill's stop button, Esc, or "Hey BizOS, stop". Finished steps are kept.
-
-**Memory** (`~/.bizos/memory.db`, local only, SQLite full-text search): every workspace is saved and reloaded
-after a restart (History menu in the workspace window); the agent remembers facts you tell it ("remember that…")
-and can reopen a past workspace ("continue my LLM pricing workspace").
-
-**Chrome extension:** `chrome://extensions` → Developer mode → Load unpacked → `chrome_extension`.
-In the overlay footer click **Pair Chrome** (copies the token), paste it in the extension's Settings.
-Chrome asks once to allow **local network access**: click Allow (the bridge is 127.0.0.1).
-
-## Exploring, deciding, paying, scheduling
-
-- **`explore_site`**: crawls one real site in your Chrome within limits (up to 25 pages, about 150 s): uses the site's own search, follows the
-  links most relevant to the goal and pagination, reads prices, tables, MOQ, lead time, terms and certificates. Navigation only; it never
-  clicks buttons that submit, buy or send. Sites that need a sign-in (alibaba.com, aliexpress.com, faire.com...) are skipped.
-- **`page_do`**: operates the page you are on by control label, several steps at once (type, choose, click, scroll). Risky controls ask first.
-- **`evaluate_options`**: requirements (weights, must-haves) against what pages actually state, as a weighted matrix with pros and cons and an
-  "evidence known" share. A must-have nobody published is "unconfirmed", not a failure.
-- **Calendar**: the pay-and-collect plan proposes one action that puts its deadlines on your Mac Calendar with alarms. It writes an `.ics`
-  and hands it to Calendar, so no macOS permission prompt is needed; Calendar asks which calendar to use.
-- **PayPal cash gate**: the balance is PayPal's snapshot minus payouts you sent after it (unsettled payouts hold their money); a payout is
-  re-checked before it is sent and a refusal is explained. `PAYPAL_SANDBOX_RECEIVER` should be a Sandbox personal account so test payouts
-  settle. If the Sandbox balance is small, `PAYPAL_DEMO_SCALE=0.1` sends 10% of each payout and the plan cash scales up to match (the
-  action card says so).
-
-## Test
+### Verify
 
 ```bash
-cd backend && uv run pytest                                    # 190 passed, 10 skipped (wake word needs macOS + model)
-cd desktop && npm test && npm run lint && npm run typecheck    # 62 passed (incl. extension DOM reader)
+cd backend && uv run pytest                                    # 190 passed
+cd desktop && npm test && npm run lint && npm run typecheck    # 62 passed
 ```
 
-Copy your keys into a repo-root `.env` (`AGENT_API_KEY`, `AGENT_BASE_URL`, `AGENT_MODEL`, `PAYPAL_CLIENT_ID`,
-`PAYPAL_CLIENT_SECRET`, `AG_STUDIO_LICENSE_KEY`; `PAYPAL_BASE_URL` defaults to the Sandbox). Node 22.12+ is needed for
-`npm install` on recent npm versions.
+## Repository map
 
-## PayPal Sandbox app: enable these features
+| Path | What's inside |
+|---|---|
+| [`backend/bizos/`](backend/bizos) | Agents, tools, 7 department flows, AG Studio compiler, PayPal client and action catalog |
+| [`desktop/`](desktop) | Electron overlay + workspace window, AG Studio host, BizOS widgets |
+| [`chrome_extension/`](chrome_extension) | MV3 extension: reads and operates real pages |
+| [`demo/`](demo) | Sample marketplace and recording scripts |
+| [`submission/`](submission) | Devpost description, film, GIFs, screenshots |
 
-At developer.paypal.com → Apps & Credentials → your app → Features:
-**Payouts**, **Invoicing**, **Transaction Search** (enabled and verified live), plus **Payment Links & Buttons** for
-payment links (and Disputes / Subscriptions if you want those). `PAYPAL_RETURN_URL` sets where buyers land after paying. Set `PAYPAL_SANDBOX_RECEIVER=<your sandbox personal account email>` in `.env` so
-test payouts and invoices land in a real sandbox account (otherwise they stay UNCLAIMED on placeholder emails).
-Large payouts can fail for lack of sandbox balance; the workspace polls the real payout status.
+## License
 
-## Notes
-
-- Without a model (no key / provider down) the same tools run deterministically.
-- Windows adapter is written but **untested**. Workspaces and idempotency results live in memory;
-  PayPal also dedupes on `sender_batch_id` / `PayPal-Request-Id`.
+Apache 2.0, see [`LICENSE`](LICENSE). PayPal and AG Grid / AG Studio are trademarks of their owners; this project uses their public developer platforms.

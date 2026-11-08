@@ -1,0 +1,159 @@
+1
+00:00:00,500 --> 00:00:03,581
+Every Monday, I ask myself three questions.
+
+2
+00:00:03,967 --> 00:00:08,217
+Who should I buy from? Can I afford it? Who still owes me?
+
+3
+00:00:09,000 --> 00:00:12,886
+Now I just ask BizOS, and it pays through PayPal.
+
+4
+00:00:15,500 --> 00:00:17,820
+Each answer lived in a different place.
+
+5
+00:00:18,500 --> 00:00:22,900
+Supplier websites, my spreadsheets, and my PayPal account.
+
+6
+00:00:23,500 --> 00:00:26,790
+It took my whole Monday. And I'm not the only one.
+
+7
+00:00:27,500 --> 00:00:30,998
+Small businesses are owed three hundred fifty-five billion dollars.
+
+8
+00:00:31,600 --> 00:00:34,640
+So this Monday, I tried something new.
+
+9
+00:00:35,033 --> 00:00:38,524
+My best seller is running low, and my supplier is late.
+
+10
+00:00:39,000 --> 00:00:41,772
+I press one shortcut, over any app, and ask.
+
+11
+00:00:42,267 --> 00:00:46,075
+BizOS writes a plan first. Nothing runs until I've seen it.
+
+12
+00:00:46,500 --> 00:00:51,038
+Then it opens each supplier's website, and reads it like I would.
+
+13
+00:00:51,433 --> 00:00:54,233
+Before it confirms an order, it asks me.
+
+14
+00:00:54,633 --> 00:00:58,919
+Then it builds my answer live, as a dashboard in AG Grid.
+
+15
+00:00:59,333 --> 00:01:03,573
+The cheapest supplier is often late. Late means empty shelves.
+
+16
+00:01:03,967 --> 00:01:08,754
+Counting lost sales, the right supplier saves me thirteen thousand dollars.
+
+17
+00:01:09,167 --> 00:01:14,047
+This isn't just a chart. The AI builds a whole AG Studio workspace.
+
+18
+00:01:14,433 --> 00:01:18,913
+It even adds its own widgets to AG Studio, like PayPal approvals.
+
+19
+00:01:19,333 --> 00:01:22,896
+Click an idea, and the dashboard asks the next question.
+
+20
+00:01:23,300 --> 00:01:26,624
+Every question gets its own design. And my own edits stay.
+
+21
+00:01:27,667 --> 00:01:29,804
+Good supplier. But can I afford it?
+
+22
+00:01:31,333 --> 00:01:36,613
+BizOS reads my real PayPal balance, even money already on its way out.
+
+23
+00:01:37,000 --> 00:01:40,730
+It keeps a safety cushion. Today, the supplier's deposit fits.
+
+24
+00:01:41,167 --> 00:01:43,497
+The rest waits for the money people owe me.
+
+25
+00:01:46,000 --> 00:01:47,890
+One of my customers is weeks late.
+
+26
+00:01:48,500 --> 00:01:52,500
+BizOS sends them a PayPal invoice, with a pay button.
+
+27
+00:01:53,000 --> 00:01:56,600
+Then I hold to approve, and PayPal pays my supplier's deposit.
+
+28
+00:01:57,000 --> 00:02:01,870
+Refunds and disputes land in my dashboard too, ready to approve.
+
+29
+00:02:02,267 --> 00:02:07,271
+BizOS reads PayPal by itself. Money only moves when I say so.
+
+30
+00:02:07,667 --> 00:02:12,387
+Due dates go on my calendar. Money in, money out, all through PayPal.
+
+31
+00:02:13,500 --> 00:02:15,876
+Next Monday, my question is different.
+
+32
+00:02:16,333 --> 00:02:21,373
+It searches real supplier websites. No price? It asks for a quote.
+
+33
+00:02:21,767 --> 00:02:26,327
+Even my finance question works: do my PayPal payments match my invoices?
+
+34
+00:02:27,167 --> 00:02:28,527
+So what changes?
+
+35
+00:02:28,933 --> 00:02:33,173
+A late invoice with a PayPal pay button can get paid two weeks sooner.
+
+36
+00:02:33,567 --> 00:02:37,624
+Not one payment over budget. And hours of chasing, gone.
+
+37
+00:02:38,033 --> 00:02:42,673
+Across millions of small businesses, that's billions of dollars, sooner.
+
+38
+00:02:43,367 --> 00:02:45,253
+My whole Monday, on one page.
+
+39
+00:02:46,000 --> 00:02:49,300
+Monday used to take all day. Now it takes one question.
+
+40
+00:02:52,500 --> 00:02:55,742
+BizOS. Ask. Check. Approve.
