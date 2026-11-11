@@ -29,6 +29,11 @@ Small businesses are owed **$355 billion** in unpaid invoices (36.2M US small bu
 
 We started with **procurement**, because it's where stock, suppliers, invoices and cash all meet. Every decision there ends as a payment, yet the facts live in three places that don't talk: supplier websites, spreadsheets, and PayPal. We wanted one question to replace twelve tabs, **without ever letting an AI move money on its own.**
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/gif-suppliers.gif" alt="Real supplier websites, read by BizOS" width="80%"><br>
+  <sub><b>One question, four real supplier websites read at once.</b></sub>
+</p>
+
 ## What it does
 
 | | What happens | Why it matters |
@@ -83,10 +88,9 @@ The AI doesn't draw a chart. **It builds a whole AG Studio workspace for every q
 
 ## PayPal is the money rail
 
-<table>
-<tr>
-<td width="40%" align="center"><img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/money-loop.gif" width="100%"></td>
-<td width="60%">
+<p align="center">
+  <img src="https://raw.githubusercontent.com/azharizz/BizOS/main/submission/assets/money-loop.gif" alt="PayPal money loop" width="45%">
+</p>
 
 **35 approved PayPal actions, in 3 risk levels:**
 
@@ -95,10 +99,6 @@ The AI doesn't draw a chart. **It builds a whole AG Studio workspace for every q
 - **4 Money:** you **press and hold** (Payouts, Refund, Order capture, Accept dispute claim)
 
 Card, vault and identity endpoints are **not on the list**, so no prompt can reach them.
-
-</td>
-</tr>
-</table>
 
 - **Cash gate:** spendable money = PayPal balance − payouts still settling − a 10% cushion, re-checked right before each payout.
 - **Sent once:** idempotency keys (`PayPal-Request-Id`, `sender_batch_id`) mean approving twice never pays twice. Every action is audited with who approved it.
